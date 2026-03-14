@@ -1,0 +1,52 @@
+# === Xcode / Swift ===
+
+# Build artifacts
+.build/
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# App bundles
+*.app/
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# Code coverage
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace/
+
+# Archives & binaries
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.o
+*.swiftdoc
+*.swiftmodule
+
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# === IDE / Editor ===
+.vscode/
+*.swp
+*.swo
+*~
+.idea/
+
+# === Misc ===
+*.log
+*.tmp
