@@ -78,6 +78,12 @@ actor UserConfigService {
         save()
     }
 
+    /// Toggle screenshot mode for data obfuscation
+    func setScreenshotMode(_ enabled: Bool) {
+        config.screenshotMode = enabled
+        save()
+    }
+
     /// Add a custom tag
     func addCustomTag(name: String) {
         guard !name.isEmpty, !config.customTags.contains(where: { $0.name == name }) else { return }

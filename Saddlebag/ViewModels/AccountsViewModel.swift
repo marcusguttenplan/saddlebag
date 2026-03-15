@@ -46,7 +46,7 @@ final class AccountsViewModel {
         var parts: [String] = []
 
         if userConfig.showAWSAccountInMenuBar, let activeProfile = userConfig.activeAWSProfile {
-            parts.append(userConfig.displayLabel(for: activeProfile))
+            parts.append(redact(userConfig.displayLabel(for: activeProfile), as: .generic))
         }
 
         if userConfig.showTimeRemainingInMenuBar {
@@ -60,7 +60,7 @@ final class AccountsViewModel {
 
         if userConfig.showGCPProjectInMenuBar,
            let activeGCP = gcpConfigurations.first(where: { $0.isActive }) {
-            parts.append(activeGCP.displayName)
+            parts.append(redact(activeGCP.displayName, as: .projectId))
         }
 
         return parts.joined(separator: " · ")
@@ -311,6 +311,18 @@ final class AccountsViewModel {
     func updateMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) async {
         await userConfigService.setMenuBarDisplay(aws: aws, time: time, gcp: gcp)
         userConfig = await userConfigService.getConfig()
+    }
+
+    /// Toggle screenshot mode for data obfuscation
+    func toggleScreenshotMode() async {
+        await userConfigService.setScreenshotMode(!userConfig.screenshotMode)
+        userConfig = await userConfigService.getConfig()
+    }
+
+    /// Redact a value if screenshot mode is active
+    func redact(_ value: String, as kind: SensitiveDataKind) -> String {
+        guard userConfig.screenshotMode else { return value }
+        return Obfuscator.redact(value, as: kind)
     }
 
 

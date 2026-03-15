@@ -9,7 +9,29 @@ struct ProfileRowView: View {
     let isFavorite: Bool
     let tokenStatus: TokenExpiryStatus?
     let timeRemaining: String?
+    let screenshotMode: Bool
     let onTap: () -> Void
+
+    private var displayTitle: String {
+        screenshotMode ? Obfuscator.redact(title, as: .generic) : title
+    }
+
+    private var displaySubtitle: String {
+        guard screenshotMode else { return subtitle }
+        // Subtitle contains segments like "Admin · 123456789012 · us-east-1"
+        return subtitle.split(separator: "·").map { segment in
+            let trimmed = segment.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains("@") {
+                return Obfuscator.redact(trimmed, as: .email)
+            } else if trimmed.allSatisfy({ $0.isNumber }) {
+                return Obfuscator.redact(trimmed, as: .accountId)
+            } else if trimmed.contains("-") && !trimmed.contains(" ") {
+                return Obfuscator.redact(trimmed, as: .projectId)
+            } else {
+                return trimmed // regions, role labels stay visible
+            }
+        }.joined(separator: " · ")
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -22,7 +44,7 @@ struct ProfileRowView: View {
                 // Main content
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
-                        Text(title)
+                        Text(displayTitle)
                             .font(.system(.body, design: .default, weight: isActive ? .semibold : .regular))
                             .foregroundStyle(isActive ? .primary : .secondary)
 
@@ -33,7 +55,7 @@ struct ProfileRowView: View {
                         }
                     }
 
-                    Text(subtitle)
+                    Text(displaySubtitle)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -107,6 +129,7 @@ extension ProfileRowView {
         self.isFavorite = userConfig.isFavorite(profile.name)
         self.tokenStatus = tokenCache?.expiryStatus ?? .unknown
         self.timeRemaining = tokenCache?.timeRemainingFormatted
+        self.screenshotMode = userConfig.screenshotMode
         self.onTap = onTap
     }
 
@@ -126,6 +149,7 @@ extension ProfileRowView {
         self.isFavorite = userConfig.isFavorite(configKey)
         self.tokenStatus = nil
         self.timeRemaining = nil
+        self.screenshotMode = userConfig.screenshotMode
         self.onTap = onTap
     }
 }

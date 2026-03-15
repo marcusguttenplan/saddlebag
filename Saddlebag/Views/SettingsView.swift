@@ -65,9 +65,9 @@ struct SettingsView: View {
             Image(systemName: hasValidToken ? "checkmark.circle.fill" : "exclamationmark.circle")
                 .foregroundStyle(hasValidToken ? .green : .orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.portalDisplayName)
+                Text(viewModel.redact(session.portalDisplayName, as: .generic))
                     .font(.system(.body, weight: .medium))
-                Text(session.startUrl)
+                Text(viewModel.redact(session.startUrl, as: .url))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -87,7 +87,7 @@ struct SettingsView: View {
 
     private var awsProfileGroupsSection: some View {
         ForEach(viewModel.groupedAWSProfiles, id: \.portal) { group in
-            GroupBox(group.portalDisplayName) {
+            GroupBox(viewModel.redact(group.portalDisplayName, as: .generic)) {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(group.profiles) { profile in
                         AWSProfileSettingsRow(
@@ -137,9 +137,9 @@ struct SettingsView: View {
             Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isActive ? .green : .secondary)
             VStack(alignment: .leading) {
-                Text(profile.name)
+                Text(viewModel.redact(profile.name, as: .generic))
                     .font(.system(.body, weight: .medium))
-                Text([profile.roleLabel, profile.accountId, profile.region].joined(separator: " · "))
+                Text([profile.roleLabel, viewModel.redact(profile.accountId, as: .accountId), profile.region].joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -244,7 +244,7 @@ struct SettingsView: View {
             Image(systemName: isAuthenticated ? "checkmark.circle.fill" : "exclamationmark.circle")
                 .foregroundStyle(isAuthenticated ? .green : .orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(account.account)
+                Text(viewModel.redact(account.account, as: .email))
                     .font(.system(.body, weight: .medium))
                 Text(account.isActive ? "Active account" : "Authenticated")
                     .font(.caption)
@@ -271,7 +271,7 @@ struct SettingsView: View {
 
     private var gcpProjectGroupsSection: some View {
         ForEach(viewModel.gcpAccounts) { account in
-            GroupBox(account.account) {
+            GroupBox(viewModel.redact(account.account, as: .email)) {
                 VStack(alignment: .leading, spacing: 4) {
                     gcpAccountProjectsContent(account: account)
                 }
@@ -345,9 +345,9 @@ struct SettingsView: View {
             Image(systemName: config.isActive ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(config.isActive ? .green : .secondary)
             VStack(alignment: .leading) {
-                Text(config.name)
+                Text(viewModel.redact(config.name, as: .generic))
                     .font(.system(.body, weight: .medium))
-                Text([config.project, config.account].compactMap { $0 }.joined(separator: " · "))
+                Text([config.project.map { viewModel.redact($0, as: .projectId) }, config.account.map { viewModel.redact($0, as: .email) }].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -437,6 +437,10 @@ struct SettingsView: View {
 
             Section("Custom Tags") {
                 customTagsSection
+            }
+
+            Section("Screenshot Mode") {
+                screenshotModeSection
             }
 
             Section("About") {
@@ -622,6 +626,21 @@ struct SettingsView: View {
         }
     }
 
+    private var screenshotModeSection: some View {
+        Group {
+            Toggle("Obfuscate sensitive data", isOn: Binding(
+                get: { viewModel.userConfig.screenshotMode },
+                set: { _ in
+                    Task { await viewModel.toggleScreenshotMode() }
+                }
+            ))
+
+            Text("Hides account IDs, email addresses, SSO URLs, and project IDs so you can safely take screenshots.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Shell Integration Helpers
 
     private static let zshrcSnippet = """
@@ -706,7 +725,10 @@ struct AWSProfileSettingsRow: View {
                                 isEditingLabel = false
                             }
                     } else {
-                        Text(userConfig.displayLabel(for: profile.name))
+                        Text({
+                            let label = userConfig.displayLabel(for: profile.name)
+                            return userConfig.screenshotMode ? Obfuscator.redact(label, as: .generic) : label
+                        }())
                             .font(.system(.body, weight: .medium))
                     }
 
@@ -717,9 +739,17 @@ struct AWSProfileSettingsRow: View {
                     }
                 }
 
-                Text("\(profile.name) · \(profile.roleLabel) · \(profile.accountId)")
+                Text({
+                    let name = profile.name
+                    let acctId = profile.accountId
+                    if userConfig.screenshotMode {
+                        return "\(Obfuscator.redact(name, as: .generic)) · \(profile.roleLabel) · \(Obfuscator.redact(acctId, as: .accountId))"
+                    }
+                    return "\(name) · \(profile.roleLabel) · \(acctId)"
+                }())
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .privacySensitive()
             }
 
             Spacer()
@@ -789,7 +819,10 @@ struct GCPProjectSettingsRow: View {
                                 isEditingLabel = false
                             }
                     } else {
-                        Text(userConfig.profileLabels[projectKey] ?? project.name)
+                        Text({
+                            let label = userConfig.profileLabels[projectKey] ?? project.name
+                            return userConfig.screenshotMode ? Obfuscator.redact(label, as: .generic) : label
+                        }())
                             .font(.system(.body, weight: .medium))
                     }
 
@@ -800,9 +833,10 @@ struct GCPProjectSettingsRow: View {
                     }
                 }
 
-                Text(project.projectId)
+                Text(userConfig.screenshotMode ? Obfuscator.redact(project.projectId, as: .projectId) : project.projectId)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .privacySensitive()
             }
 
             Spacer()

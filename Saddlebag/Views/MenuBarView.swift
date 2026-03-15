@@ -169,7 +169,7 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(viewModel.userConfig.displayLabel(for: activeProfile.name))
+                        Text(viewModel.redact(viewModel.userConfig.displayLabel(for: activeProfile.name), as: .generic))
                             .font(.system(.body, weight: .medium))
                         HStack(spacing: 6) {
                             Text(activeProfile.roleLabel)
@@ -214,9 +214,9 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(activeConfig.displayName)
+                        Text(viewModel.redact(activeConfig.displayName, as: .projectId))
                             .font(.system(.body, weight: .medium))
-                        Text(activeConfig.account ?? "")
+                        Text(viewModel.redact(activeConfig.account ?? "", as: .email))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -321,7 +321,7 @@ struct MenuBarView: View {
                         Image(systemName: expandedAWSPortals.contains(group.portal) ? "chevron.down" : "chevron.right")
                             .font(.system(size: 8, weight: .bold))
                             .frame(width: 10)
-                        Text(group.portalDisplayName)
+                        Text(viewModel.redact(group.portalDisplayName, as: .generic))
                             .font(.system(size: 11, weight: .medium))
                         Text("(\(group.profiles.count))")
                             .font(.system(size: 10))
@@ -422,7 +422,7 @@ struct MenuBarView: View {
                         Image(systemName: expandedGCPAccounts.contains(account.account) ? "chevron.down" : "chevron.right")
                             .font(.system(size: 8, weight: .bold))
                             .frame(width: 10)
-                        Text(accountDisplayName(account.account))
+                        Text(viewModel.redact(accountDisplayName(account.account), as: .email))
                             .font(.system(size: 11, weight: .medium))
                         if let projects = viewModel.gcpProjectsByAccount[account.account] {
                             Text("(\(projects.count))")
@@ -515,10 +515,10 @@ struct MenuBarView: View {
                     .frame(width: 8, height: 8)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(viewModel.userConfig.profileLabels["gcp-project:\(project.projectId)"] ?? project.name)
+                    Text(viewModel.redact(viewModel.userConfig.profileLabels["gcp-project:\(project.projectId)"] ?? project.name, as: .generic))
                         .font(.system(.body, design: .default, weight: isActive ? .semibold : .regular))
                         .foregroundStyle(isActive ? .primary : .secondary)
-                    Text(project.projectId)
+                    Text(viewModel.redact(project.projectId, as: .projectId))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

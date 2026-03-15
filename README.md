@@ -11,6 +11,7 @@ Saddlebag lives in your menu bar and gives you a unified view of your cloud acco
 - **Quick switching** — swap active profiles and configurations without touching the terminal
 - **Auth flows** — trigger `gcloud auth login` and `gcloud auth application-default login` directly from the UI
 - **Settings** — manage project tags, labels, and per-account preferences
+- **Screenshot Mode** — obfuscate account IDs, emails, SSO URLs, and project IDs for safe screen sharing
 
 ## Requirements
 
@@ -54,6 +55,7 @@ Saddlebag/
 ├── Services/
 │   ├── AWSConfigService.swift  # Parses ~/.aws/config
 │   ├── GCPConfigService.swift  # Reads gcloud configurations
+│   ├── Obfuscator.swift        # Data redaction for screenshot mode
 │   ├── SSOSessionService.swift # Manages SSO token lifecycle
 │   ├── ShellService.swift      # Shell command execution
 │   └── UserConfigService.swift # User config persistence
@@ -67,6 +69,18 @@ Saddlebag/
         ├── HorseshoeIcon.swift  # Custom app icon
         └── ProfileRowView.swift # Reusable profile row
 ```
+
+## Screenshot Mode
+
+Toggle **Settings → General → Obfuscate sensitive data** to redact sensitive information across the entire UI. This lets you safely take screenshots or record demos without exposing real credentials.
+
+| Data Type | Example | Redacted |
+|-----------|---------|----------|
+| Email | `user@company.com` | `u•••@c•••.com` |
+| Account ID | `123456789012` | `••••••••9012` |
+| SSO URL | `https://acme.awsapps.com/start` | `https://••••.awsapps.com/start` |
+| Project ID | `my-project-prod-1234` | `••••-••••-1234` |
+| Profile/Portal names | `courseclear` | `c••••••••••r` |
 
 ## License
 

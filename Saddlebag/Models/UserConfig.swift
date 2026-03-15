@@ -140,11 +140,14 @@ struct UserConfig: Codable, Sendable {
     /// User-created custom tags
     var customTags: [CustomTag]
 
+    /// Whether to redact sensitive data for screenshots
+    var screenshotMode: Bool
+
     enum CodingKeys: String, CodingKey {
         case profileLabels, profileTags, favorites, refreshInterval
         case activeAWSProfile, showAWSAccountInMenuBar
         case showTimeRemainingInMenuBar, showGCPProjectInMenuBar
-        case customTags
+        case customTags, screenshotMode
     }
 
     init(from decoder: Decoder) throws {
@@ -158,6 +161,7 @@ struct UserConfig: Codable, Sendable {
         showTimeRemainingInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showTimeRemainingInMenuBar) ?? false
         showGCPProjectInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showGCPProjectInMenuBar) ?? false
         customTags = try container.decodeIfPresent([CustomTag].self, forKey: .customTags) ?? []
+        screenshotMode = try container.decodeIfPresent(Bool.self, forKey: .screenshotMode) ?? false
     }
 
     init(
@@ -169,7 +173,8 @@ struct UserConfig: Codable, Sendable {
         showAWSAccountInMenuBar: Bool,
         showTimeRemainingInMenuBar: Bool,
         showGCPProjectInMenuBar: Bool,
-        customTags: [CustomTag]
+        customTags: [CustomTag],
+        screenshotMode: Bool = false
     ) {
         self.profileLabels = profileLabels
         self.profileTags = profileTags
@@ -180,6 +185,7 @@ struct UserConfig: Codable, Sendable {
         self.showTimeRemainingInMenuBar = showTimeRemainingInMenuBar
         self.showGCPProjectInMenuBar = showGCPProjectInMenuBar
         self.customTags = customTags
+        self.screenshotMode = screenshotMode
     }
 
     static let `default` = UserConfig(
@@ -191,7 +197,8 @@ struct UserConfig: Codable, Sendable {
         showAWSAccountInMenuBar: false,
         showTimeRemainingInMenuBar: false,
         showGCPProjectInMenuBar: false,
-        customTags: []
+        customTags: [],
+        screenshotMode: false
     )
 
     /// Get the display label for a profile, falling back to the profile name
