@@ -1,4 +1,4 @@
-# 🐴 Saddlebag
+# Saddlebag
 
 A lightweight macOS menu bar app for managing multi-cloud credentials across **AWS** and **GCP** — all from one place.
 
