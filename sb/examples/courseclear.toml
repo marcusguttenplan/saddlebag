@@ -1,0 +1,18 @@
+[desk]
+name = "Course Clear"
+
+[aws]
+profile = "cc-admin"
+
+[gcp]
+config = "default"
+
+[git]
+email = "marcus@courseclear.io"
+name = "Marcus Guttenplan"
+
+[ssh]
+key = "~/.ssh/id_courseclear"
+
+[env]
+ORGANIZATION = "courseclear"

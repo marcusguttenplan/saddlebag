@@ -25,6 +25,10 @@ final class AccountsViewModel {
     var isLoggingIn = false
     var lastError: String?
 
+    // Desk state
+    var desks: [Desk] = []
+    var activeDesk: Desk?
+
     // MARK: - Services
 
     private let shell = ShellService()
@@ -32,12 +36,14 @@ final class AccountsViewModel {
     private let gcpConfigService: GCPConfigService
     private let ssoSessionService: SSOSessionService
     private let userConfigService = UserConfigService()
+    private let deskService: DeskService
 
     private var refreshTimer: Timer?
 
     init() {
         self.gcpConfigService = GCPConfigService(shell: shell)
         self.ssoSessionService = SSOSessionService(shell: shell)
+        self.deskService = DeskService(shell: shell, gcpConfigService: gcpConfigService, userConfigService: userConfigService)
     }
 
     // MARK: - Computed
@@ -167,6 +173,7 @@ final class AccountsViewModel {
         }
 
         isLoading = false
+        await loadDesks()
         writeSharedState()
     }
 
@@ -209,6 +216,45 @@ final class AccountsViewModel {
             writeSharedState()
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Switch to a desk — orchestrates AWS, GCP, SSH, and state
+    func switchDesk(_ desk: Desk) async {
+        do {
+            let state = try await deskService.switchTo(desk)
+            activeDesk = desk
+            // Refresh all data to reflect the new context
+            await refresh()
+            // Update userConfig with the new AWS profile
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = "Failed to switch desk: \(error.localizedDescription)"
+        }
+    }
+
+    /// Switch to a desk by ID (used by IPC)
+    func switchDeskByID(_ id: String) async -> Bool {
+        guard let desk = desks.first(where: { $0.id == id }) else {
+            lastError = "Desk '\(id)' not found"
+            return false
+        }
+        await switchDesk(desk)
+        return true
+    }
+
+    /// Load desk definitions from ~/.saddlebag/desks/
+    func loadDesks() async {
+        do {
+            desks = try await deskService.loadAll()
+            // Restore active desk from shared state
+            let state = SharedState.read()
+            if let activeDeskID = state.activeDesk {
+                activeDesk = desks.first(where: { $0.id == activeDeskID })
+            }
+        } catch {
+            // Non-fatal: desks are optional
+            print("[Desks] Failed to load: \(error)")
         }
     }
 
@@ -474,6 +520,7 @@ final class AccountsViewModel {
     private func writeSharedState() {
         let activeGCPConfig = gcpConfigurations.first(where: { $0.isActive })?.name
         let state = SharedState(
+            activeDesk: activeDesk?.id,
             awsProfile: userConfig.activeAWSProfile,
             gcpConfig: activeGCPConfig
         )

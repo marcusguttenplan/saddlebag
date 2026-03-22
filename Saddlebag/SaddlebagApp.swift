@@ -39,7 +39,7 @@ struct SaddlebagApp: App {
 
 /// Handle IPC commands from the CLI
 @MainActor
-private func handleIPCCommand(_ command: IPCCommand, viewModel: AccountsViewModel) -> IPCResponse {
+private func handleIPCCommand(_ command: IPCCommand, viewModel: AccountsViewModel) async -> IPCResponse {
     switch command.action {
     case "status":
         let state = SharedState.read()
@@ -52,16 +52,12 @@ private func handleIPCCommand(_ command: IPCCommand, viewModel: AccountsViewMode
         guard let deskName = command.desk else {
             return IPCResponse(status: "error", error: "missing desk name")
         }
-        // TODO: Implement full desk switching via DeskService
-        // For now, write the desk name to state
-        var state = SharedState.read()
-        state.activeDesk = deskName
-        do {
-            try state.write()
-        } catch {
-            return IPCResponse(status: "error", error: error.localizedDescription)
+        let success = await viewModel.switchDeskByID(deskName)
+        if success {
+            return IPCResponse(status: "ok", message: "switched to \(deskName)")
+        } else {
+            return IPCResponse(status: "error", error: "desk '\(deskName)' not found in ~/.saddlebag/desks/")
         }
-        return IPCResponse(status: "ok", message: "switched to \(deskName)")
 
     case "refresh":
         Task { @MainActor in

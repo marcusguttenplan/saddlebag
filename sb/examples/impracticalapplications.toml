@@ -1,0 +1,15 @@
+[desk]
+name = "Impractical Applications"
+
+[aws]
+profile = "default"
+
+[git]
+email = "marcus@impracticalapplications.com"
+name = "Marcus Guttenplan"
+
+[ssh]
+key = "~/.ssh/id_impractical"
+
+[env]
+ORGANIZATION = "impracticalapplications"
