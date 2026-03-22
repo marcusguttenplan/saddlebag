@@ -4,23 +4,17 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"github.com/marcusguttenplan/sb/internal/state"
 )
 
 var currentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Print the active desk name",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := state.Read()
-		if err != nil {
-			return fmt.Errorf("reading state: %w", err)
-		}
-
-		if s.ActiveDesk == "" {
+		deskID, _, _ := resolveCurrentDesk()
+		if deskID == "" {
 			fmt.Println("(none)")
 		} else {
-			fmt.Println(s.ActiveDesk)
+			fmt.Println(deskID)
 		}
 		return nil
 	},
