@@ -1,16 +1,16 @@
 import Foundation
 
 /// An SSO session definition from ~/.aws/config
-struct SSOSession: Identifiable, Hashable, Sendable {
-    let id: String  // same as name
-    let name: String
-    let startUrl: String
-    let region: String
-    let registrationScopes: String
+public struct SSOSession: Identifiable, Hashable, Sendable {
+    public let id: String  // same as name
+    public let name: String
+    public let startUrl: String
+    public let region: String
+    public let registrationScopes: String
 
     /// The portal domain extracted from the SSO start URL
     /// e.g. "https://courseclear.awsapps.com/start" → "courseclear"
-    var portalDomain: String {
+    public var portalDomain: String {
         guard let url = URL(string: startUrl),
               let host = url.host else {
             return name
@@ -19,7 +19,7 @@ struct SSOSession: Identifiable, Hashable, Sendable {
     }
 
     /// Human-readable portal name with capitalization
-    var portalDisplayName: String {
+    public var portalDisplayName: String {
         portalDomain
             .replacingOccurrences(of: "-", with: " ")
             .split(separator: " ")
@@ -27,7 +27,7 @@ struct SSOSession: Identifiable, Hashable, Sendable {
             .joined(separator: " ")
     }
 
-    init(
+    public init(
         name: String,
         startUrl: String,
         region: String = "us-east-1",

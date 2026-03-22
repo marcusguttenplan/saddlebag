@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import SaddlebagShared
 
 /// Central state manager for all cloud accounts
 @MainActor
@@ -113,6 +114,7 @@ final class AccountsViewModel {
                 sessions: sessions
             )
         } catch {
+            // Fail open: don't clear profiles if we fail to read, but log error
             lastError = "Failed to load AWS config: \(error.localizedDescription)"
         }
 
@@ -120,25 +122,44 @@ final class AccountsViewModel {
         tokenStatuses = await ssoSessionService.loadTokenStatuses(for: ssoSessions)
 
         // Load GCP data concurrently
-        async let configs = gcpConfigService.loadConfigurations()
-        async let accounts = gcpConfigService.listAuthenticatedAccounts()
-        gcpConfigurations = await configs
-        gcpAccounts = await accounts
+        do {
+            let configs = try await gcpConfigService.loadConfigurations()
+            self.gcpConfigurations = configs
+        } catch {
+            // fail open
+        }
+
+        do {
+            let accounts = try await gcpConfigService.listAuthenticatedAccounts()
+            self.gcpAccounts = accounts
+        } catch {
+            // fail open
+        }
 
         // Load projects for each account concurrently
-        await withTaskGroup(of: (String, [GCPProject], String?).self) { group in
+        await withTaskGroup(of: (String, [GCPProject], Error?).self) { group in
             for account in gcpAccounts {
                 group.addTask {
-                    let (projects, error) = await self.gcpConfigService.listProjects(account: account.account)
-                    return (account.account, projects, error)
+                    do {
+                        let projects = try await self.gcpConfigService.listProjects(account: account.account)
+                        return (account.account, projects, nil)
+                    } catch {
+                        return (account.account, [], error)
+                    }
                 }
             }
-            var results: [String: [GCPProject]] = [:]
-            var authNeeded: Set<String> = []
+            // Start with existing to fail open
+            var results: [String: [GCPProject]] = self.gcpProjectsByAccount
+            var authNeeded: Set<String> = self.gcpAccountAuthNeeded
+            
             for await (account, projects, error) in group {
-                results[account] = projects
-                if error == "auth_needed" {
-                    authNeeded.insert(account)
+                if let error {
+                    if case SaddlebagError.unauthenticated = error {
+                        authNeeded.insert(account)
+                    }
+                } else {
+                    results[account] = projects
+                    authNeeded.remove(account)
                 }
             }
             self.gcpProjectsByAccount = results
@@ -151,10 +172,12 @@ final class AccountsViewModel {
     /// Login to an AWS SSO profile
     func loginAWS(profile: AWSProfile) async {
         isLoggingIn = true
-        let success = await ssoSessionService.login(profileName: profile.name)
-        if success {
-            await userConfigService.setActiveProfile(profile.name)
+        do {
+            try await ssoSessionService.login(profileName: profile.name)
+            try await userConfigService.setActiveProfile(profile.name)
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
         isLoggingIn = false
     }
@@ -171,43 +194,57 @@ final class AccountsViewModel {
 
     /// Set a profile as the active AWS profile (without SSO login)
     func setActiveAWS(profile: AWSProfile) async {
-        await userConfigService.setActiveProfile(profile.name)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.setActiveProfile(profile.name)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Switch active GCP configuration
     func switchGCP(to config: GCPConfiguration) async {
-        let success = await gcpConfigService.activate(configName: config.name)
-        if success {
+        do {
+            try await gcpConfigService.activate(configName: config.name)
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Set active GCP project and account on the active configuration
     func setGCPProject(_ projectId: String, account: String? = nil, configuration: String? = nil) async {
-        // Set the account first so the project is accessed with the right credentials
-        if let account {
-            _ = await gcpConfigService.setAccount(account, configuration: configuration)
-        }
-        let success = await gcpConfigService.setProject(projectId, configuration: configuration)
-        if success {
+        do {
+            // Set the account first so the project is accessed with the right credentials
+            if let account {
+                try await gcpConfigService.setAccount(account, configuration: configuration)
+            }
+            try await gcpConfigService.setProject(projectId, configuration: configuration)
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Load projects for a GCP account (stores per-account)
     func loadGCPProjects(account: String? = nil) async {
-        let (projects, _) = await gcpConfigService.listProjects(account: account)
-        gcpProjects = projects
+        do {
+            let projects = try await gcpConfigService.listProjects(account: account)
+            gcpProjects = projects
+        } catch {
+            // fail open
+        }
     }
 
     /// Re-authenticate a specific GCP account and reload its projects
     func loginGCPAccount(_ account: String) async {
         isLoading = true
-        let success = await gcpConfigService.loginAccount(account)
-        if success {
+        do {
+            try await gcpConfigService.loginAccount(account)
             gcpAccountAuthNeeded.remove(account)
             await refresh()
+        } catch {
+            lastError = "Failed to login to \(account): \(error.localizedDescription)"
         }
         isLoading = false
     }
@@ -215,108 +252,154 @@ final class AccountsViewModel {
     /// Run gcloud auth login for a GCP project's account
     func gcloudAuthLogin(account: String) async {
         isLoading = true
-        _ = await gcpConfigService.loginAccount(account)
-        await refresh()
+        do {
+            try await gcpConfigService.loginAccount(account)
+            await refresh()
+        } catch {
+            lastError = "Failed to authenticate account (\(account)): \(error.localizedDescription)"
+        }
         isLoading = false
     }
 
     /// Run gcloud auth application-default login for a project
     func gcloudApplicationDefaultLogin(project: String) async {
         isLoading = true
-        _ = await gcpConfigService.applicationDefaultLogin(project: project)
+        do {
+            try await gcpConfigService.applicationDefaultLogin(project: project)
+        } catch {
+            lastError = "Failed to run application-default login: \(error.localizedDescription)"
+        }
         isLoading = false
     }
 
     /// Add a new Google account via browser auth
     func addGCPAccount() async {
         isLoading = true
-        let success = await gcpConfigService.addAccount()
-        if success {
+        do {
+            try await gcpConfigService.addAccount()
             await refresh()
+        } catch {
+            lastError = "Failed to add Google Account: \(error.localizedDescription)"
         }
         isLoading = false
     }
 
     /// Revoke a Google account
     func revokeGCPAccount(_ account: String) async {
-        let success = await gcpConfigService.revokeAccount(account)
-        if success {
+        do {
+            try await gcpConfigService.revokeAccount(account)
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Create a new gcloud configuration (org profile)
     func createGCPConfig(name: String, account: String?, project: String?, region: String?) async {
-        let success = await gcpConfigService.createConfiguration(
-            name: name, account: account, project: project, region: region
-        )
-        if success {
+        do {
+            try await gcpConfigService.createConfiguration(
+                name: name, account: account, project: project, region: region
+            )
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Delete a gcloud configuration
     func deleteGCPConfig(name: String) async {
-        let success = await gcpConfigService.deleteConfiguration(name: name)
-        if success {
+        do {
+            try await gcpConfigService.deleteConfiguration(name: name)
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Set a human-readable label for a profile
     func setLabel(for profileName: String, label: String?) async {
-        await userConfigService.setLabel(for: profileName, label: label)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.setLabel(for: profileName, label: label)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Set environment tag for a profile
     func setTag(for profileName: String, tag: ProfileTag?) async {
-        await userConfigService.setTag(for: profileName, tag: tag)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.setTag(for: profileName, tag: tag)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Toggle favorite status for a profile
     func toggleFavorite(_ profileName: String) async {
-        await userConfigService.toggleFavorite(profileName)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.toggleFavorite(profileName)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Create a new AWS SSO profile in ~/.aws/config
     func createAWSProfile(name: String, ssoSession: String, accountId: String, roleName: String, region: String) async {
-        let success = awsConfigService.appendProfile(
-            name: name,
-            ssoSession: ssoSession,
-            accountId: accountId,
-            roleName: roleName,
-            region: region
-        )
-        if success {
+        do {
+            try awsConfigService.appendProfile(
+                name: name,
+                ssoSession: ssoSession,
+                accountId: accountId,
+                roleName: roleName,
+                region: region
+            )
             await refresh()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
     /// Add a custom tag
     func addCustomTag(name: String) async {
-        await userConfigService.addCustomTag(name: name)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.addCustomTag(name: name)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Remove a custom tag
     func removeCustomTag(name: String) async {
-        await userConfigService.removeCustomTag(name: name)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.removeCustomTag(name: name)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Update menubar display settings
     func updateMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) async {
-        await userConfigService.setMenuBarDisplay(aws: aws, time: time, gcp: gcp)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.setMenuBarDisplay(aws: aws, time: time, gcp: gcp)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Toggle screenshot mode for data obfuscation
     func toggleScreenshotMode() async {
-        await userConfigService.setScreenshotMode(!userConfig.screenshotMode)
-        userConfig = await userConfigService.getConfig()
+        do {
+            try await userConfigService.setScreenshotMode(!userConfig.screenshotMode)
+            userConfig = await userConfigService.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     /// Redact a value if screenshot mode is active

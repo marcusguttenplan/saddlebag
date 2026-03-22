@@ -1,15 +1,18 @@
 import Foundation
 
 /// Parses ~/.aws/config into AWSProfile and SSOSession models
-struct AWSConfigService: Sendable {
+public struct AWSConfigService: Sendable {
     private let configPath: String
 
-    init(configPath: String? = nil) {
+    public init(configPath: String? = nil) {
         self.configPath = configPath ?? "\(NSHomeDirectory())/.aws/config"
     }
 
     /// Load all profiles and SSO sessions from the AWS config file
-    func loadProfiles() throws -> (profiles: [AWSProfile], sessions: [SSOSession]) {
+    public func loadProfiles() throws -> (profiles: [AWSProfile], sessions: [SSOSession]) {
+        guard FileManager.default.fileExists(atPath: configPath) else {
+            return ([], [])
+        }
         let content = try String(contentsOfFile: configPath, encoding: .utf8)
         let sections = parseINI(content)
 
@@ -60,7 +63,7 @@ struct AWSConfigService: Sendable {
     }
 
     /// Group profiles by their SSO portal domain
-    func groupedProfiles(
+    public func groupedProfiles(
         profiles: [AWSProfile],
         sessions: [SSOSession]
     ) -> [(portal: String, portalDisplayName: String, profiles: [AWSProfile])] {
@@ -85,7 +88,7 @@ struct AWSConfigService: Sendable {
     }
 
     /// Append a new SSO profile section to ~/.aws/config
-    func appendProfile(name: String, ssoSession: String, accountId: String, roleName: String, region: String) -> Bool {
+    public func appendProfile(name: String, ssoSession: String, accountId: String, roleName: String, region: String) throws {
         let section = """
 
         [profile \(name)]
@@ -101,10 +104,8 @@ struct AWSConfigService: Sendable {
             handle.seekToEndOfFile()
             handle.write(("\n" + section + "\n").data(using: .utf8)!)
             handle.closeFile()
-            return true
         } catch {
-            print("Failed to append AWS profile \(name): \(error)")
-            return false
+            throw SaddlebagError.fileWriteError(path: configPath, reason: error.localizedDescription)
         }
     }
 

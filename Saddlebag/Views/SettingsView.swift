@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import SaddlebagShared
 
 /// Settings window with tabs for AWS, GCP, and General preferences
 struct SettingsView: View {
@@ -23,6 +24,14 @@ struct SettingsView: View {
         .frame(width: 580, height: 460)
         .task {
             await viewModel.refresh()
+        }
+        .alert("Error", isPresented: Binding(
+            get: { viewModel.lastError != nil },
+            set: { _ in viewModel.lastError = nil }
+        ), presenting: viewModel.lastError) { _ in
+            Button("OK", role: .cancel) { }
+        } message: { errorMsg in
+            Text(errorMsg)
         }
     }
 

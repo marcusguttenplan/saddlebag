@@ -1,17 +1,17 @@
 import Foundation
 
 /// Manages AWS SSO token lifecycle — checks cached tokens and triggers login
-actor SSOSessionService {
+public actor SSOSessionService {
     private let shell: ShellService
     private let cachePath: String
 
-    init(shell: ShellService, cachePath: String? = nil) {
+    public init(shell: ShellService, cachePath: String? = nil) {
         self.shell = shell
         self.cachePath = cachePath ?? "\(NSHomeDirectory())/.aws/sso/cache"
     }
 
     /// Check all cached SSO tokens and match them to sessions by startUrl
-    func loadTokenStatuses(for sessions: [SSOSession]) -> [String: SSOTokenCache] {
+    public func loadTokenStatuses(for sessions: [SSOSession]) -> [String: SSOTokenCache] {
         var statuses: [String: SSOTokenCache] = [:]
 
         let fileManager = FileManager.default
@@ -60,7 +60,7 @@ actor SSOSessionService {
     }
 
     /// Get the best token status for a specific profile
-    func tokenStatus(
+    public func tokenStatus(
         for profile: AWSProfile,
         sessions: [SSOSession],
         tokenStatuses: [String: SSOTokenCache]
@@ -75,18 +75,12 @@ actor SSOSessionService {
     }
 
     /// Initiate SSO login for a profile
-    func login(profileName: String) async -> Bool {
-        do {
-            let result = try await shell.run("aws sso login --profile \(profileName)")
-            return result.succeeded
-        } catch {
-            print("SSO login failed for \(profileName): \(error)")
-            return false
-        }
+    public func login(profileName: String) async throws {
+        _ = try await shell.run("aws sso login --profile \(profileName)")
     }
 
     /// Check if a specific profile has a valid (non-expired) session
-    func isSessionValid(
+    public func isSessionValid(
         for profile: AWSProfile,
         sessions: [SSOSession],
         tokenStatuses: [String: SSOTokenCache]

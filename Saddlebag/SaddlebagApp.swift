@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import SaddlebagShared
 
 @main
 struct SaddlebagApp: App {

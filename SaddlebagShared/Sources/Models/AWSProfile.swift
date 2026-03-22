@@ -1,33 +1,33 @@
 import Foundation
 
 /// An AWS SSO profile parsed from ~/.aws/config
-struct AWSProfile: Identifiable, Hashable, Sendable {
-    let id: String  // same as name
-    let name: String
-    let ssoSessionName: String
-    let accountId: String
-    let roleName: String
-    let region: String
-    let output: String
+public struct AWSProfile: Identifiable, Hashable, Sendable {
+    public let id: String  // same as name
+    public let name: String
+    public let ssoSessionName: String
+    public let accountId: String
+    public let roleName: String
+    public let region: String
+    public let output: String
 
     /// Whether this profile has an admin role
-    var isAdmin: Bool {
+    public var isAdmin: Bool {
         roleName.localizedCaseInsensitiveContains("Administrator")
     }
 
     /// Whether this profile has a read-only role
-    var isReadOnly: Bool {
+    public var isReadOnly: Bool {
         roleName.localizedCaseInsensitiveContains("ReadOnly")
     }
 
     /// Short role label for display
-    var roleLabel: String {
+    public var roleLabel: String {
         if isAdmin { return "Admin" }
         if isReadOnly { return "Read Only" }
         return roleName
     }
 
-    init(
+    public init(
         name: String,
         ssoSessionName: String,
         accountId: String,

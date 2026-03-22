@@ -1,18 +1,14 @@
 import Foundation
 
 /// Manages persistent user preferences (labels, tags, favorites)
-/// Stored as JSON at ~/Library/Application Support/Saddlebag/config.json
-actor UserConfigService {
+/// Stored as JSON at ~/.saddlebag/config.json
+public actor UserConfigService {
     private let configPath: String
     private var config: UserConfig
 
-    init() {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!.appendingPathComponent("Saddlebag")
-
-        self.configPath = appSupport.appendingPathComponent("config.json").path
+    public init() {
+        let saddlebagDir = "\(NSHomeDirectory())/.saddlebag"
+        self.configPath = "\(saddlebagDir)/config.json"
 
         // Load existing config or use defaults
         if let data = FileManager.default.contents(atPath: configPath),
@@ -24,85 +20,85 @@ actor UserConfigService {
     }
 
     /// Get the current config
-    func getConfig() -> UserConfig {
+    public func getConfig() -> UserConfig {
         config
     }
 
     /// Set a human-readable label for a profile
-    func setLabel(for profileName: String, label: String?) {
+    public func setLabel(for profileName: String, label: String?) throws {
         if let label, !label.isEmpty {
             config.profileLabels[profileName] = label
         } else {
             config.profileLabels.removeValue(forKey: profileName)
         }
-        save()
+        try save()
     }
 
     /// Set the environment tag for a profile
-    func setTag(for profileName: String, tag: ProfileTag?) {
+    public func setTag(for profileName: String, tag: ProfileTag?) throws {
         if let tag {
             config.profileTags[profileName] = tag
         } else {
             config.profileTags.removeValue(forKey: profileName)
         }
-        save()
+        try save()
     }
 
     /// Toggle a profile as a favorite
-    func toggleFavorite(_ profileName: String) {
+    public func toggleFavorite(_ profileName: String) throws {
         if config.favorites.contains(profileName) {
             config.favorites.removeAll { $0 == profileName }
         } else {
             config.favorites.append(profileName)
         }
-        save()
+        try save()
     }
 
     /// Set the active AWS profile
-    func setActiveProfile(_ profileName: String?) {
+    public func setActiveProfile(_ profileName: String?) throws {
         config.activeAWSProfile = profileName
-        save()
+        try save()
     }
 
     /// Set the refresh interval
-    func setRefreshInterval(_ seconds: Int) {
+    public func setRefreshInterval(_ seconds: Int) throws {
         config.refreshInterval = max(10, seconds)
-        save()
+        try save()
     }
 
     /// Update menubar display settings
-    func setMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) {
+    public func setMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) throws {
         config.showAWSAccountInMenuBar = aws
         config.showTimeRemainingInMenuBar = time
         config.showGCPProjectInMenuBar = gcp
-        save()
+        try save()
     }
 
     /// Toggle screenshot mode for data obfuscation
-    func setScreenshotMode(_ enabled: Bool) {
+    public func setScreenshotMode(_ enabled: Bool) throws {
         config.screenshotMode = enabled
-        save()
+        try save()
     }
 
     /// Add a custom tag
-    func addCustomTag(name: String) {
+    public func addCustomTag(name: String) throws {
         guard !name.isEmpty, !config.customTags.contains(where: { $0.name == name }) else { return }
         config.customTags.append(CustomTag(name: name))
-        save()
+        try save()
     }
 
     /// Remove a custom tag and clear it from all profiles using it
-    func removeCustomTag(name: String) {
+    public func removeCustomTag(name: String) throws {
         config.customTags.removeAll { $0.name == name }
         // Remove tag assignments using this custom tag
         let customTag = ProfileTag.custom(name)
         config.profileTags = config.profileTags.filter { $0.value != customTag }
-        save()
+        try save()
     }
 
     // MARK: - Persistence
 
-    private func save() {
+    private func save() throws {
         do {
             let dir = (configPath as NSString).deletingLastPathComponent
             try FileManager.default.createDirectory(
@@ -115,7 +111,7 @@ actor UserConfigService {
             let data = try encoder.encode(config)
             try data.write(to: URL(fileURLWithPath: configPath))
         } catch {
-            print("Failed to save user config: \(error)")
+            throw SaddlebagError.fileWriteError(path: configPath, reason: error.localizedDescription)
         }
     }
 }

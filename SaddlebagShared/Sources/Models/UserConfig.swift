@@ -2,13 +2,13 @@ import Foundation
 import SwiftUI
 
 /// Built-in environment tags for color-coding profiles
-enum BuiltInTag: String, Codable, CaseIterable, Sendable {
+public enum BuiltInTag: String, Codable, CaseIterable, Sendable {
     case prod
     case staging
     case dev
     case personal
 
-    var label: String {
+    public var label: String {
         switch self {
         case .prod: return "Production"
         case .staging: return "Staging"
@@ -17,7 +17,7 @@ enum BuiltInTag: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    var color: Color {
+    public var color: Color {
         switch self {
         case .prod: return .red
         case .staging: return .orange
@@ -26,7 +26,7 @@ enum BuiltInTag: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    var sortOrder: Int {
+    public var sortOrder: Int {
         switch self {
         case .prod: return 0
         case .staging: return 1
@@ -37,25 +37,25 @@ enum BuiltInTag: String, Codable, CaseIterable, Sendable {
 }
 
 /// A profile tag — either a built-in environment tag or a user-created custom tag
-enum ProfileTag: Codable, Hashable, Sendable {
+public enum ProfileTag: Codable, Hashable, Sendable {
     case builtIn(BuiltInTag)
     case custom(String)
 
-    var label: String {
+    public var label: String {
         switch self {
         case .builtIn(let tag): return tag.label
         case .custom(let name): return name
         }
     }
 
-    var color: Color {
+    public var color: Color {
         switch self {
         case .builtIn(let tag): return tag.color
         case .custom: return .purple
         }
     }
 
-    var emoji: String {
+    public var emoji: String {
         switch self {
         case .builtIn(let tag):
             switch tag {
@@ -68,7 +68,7 @@ enum ProfileTag: Codable, Hashable, Sendable {
         }
     }
 
-    var sortOrder: Int {
+    public var sortOrder: Int {
         switch self {
         case .builtIn(let tag): return tag.sortOrder
         case .custom: return 10 // custom tags sort after built-in
@@ -76,13 +76,13 @@ enum ProfileTag: Codable, Hashable, Sendable {
     }
 
     /// All built-in tags for pickers
-    static var builtInCases: [ProfileTag] {
+    public static var builtInCases: [ProfileTag] {
         BuiltInTag.allCases.map { .builtIn($0) }
     }
 
     // MARK: - Codable (backward compatible with old "prod"/"staging" strings)
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let raw = try container.decode(String.self)
 
@@ -97,7 +97,7 @@ enum ProfileTag: Codable, Hashable, Sendable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .builtIn(let tag):
@@ -109,39 +109,43 @@ enum ProfileTag: Codable, Hashable, Sendable {
 }
 
 /// A user-defined custom tag stored in config
-struct CustomTag: Codable, Hashable, Sendable, Identifiable {
-    let name: String
-    var id: String { name }
+public struct CustomTag: Codable, Hashable, Sendable, Identifiable {
+    public let name: String
+    public var id: String { name }
+
+    public init(name: String) {
+        self.name = name
+    }
 }
 
 /// Persisted user preferences
-struct UserConfig: Codable, Sendable {
+public struct UserConfig: Codable, Sendable {
     /// Map profile name → human-readable label
     /// e.g. "cc-dns-admin" → "DNS Admin"
-    var profileLabels: [String: String]
+    public var profileLabels: [String: String]
 
     /// Map profile name → environment tag
-    var profileTags: [String: ProfileTag]
+    public var profileTags: [String: ProfileTag]
 
     /// Pinned profile names shown at top of list
-    var favorites: [String]
+    public var favorites: [String]
 
     /// Seconds between token status refreshes
-    var refreshInterval: Int
+    public var refreshInterval: Int
 
     /// Currently active AWS profile name
-    var activeAWSProfile: String?
+    public var activeAWSProfile: String?
 
     // Menubar display settings
-    var showAWSAccountInMenuBar: Bool
-    var showTimeRemainingInMenuBar: Bool
-    var showGCPProjectInMenuBar: Bool
+    public var showAWSAccountInMenuBar: Bool
+    public var showTimeRemainingInMenuBar: Bool
+    public var showGCPProjectInMenuBar: Bool
 
     /// User-created custom tags
-    var customTags: [CustomTag]
+    public var customTags: [CustomTag]
 
     /// Whether to redact sensitive data for screenshots
-    var screenshotMode: Bool
+    public var screenshotMode: Bool
 
     enum CodingKeys: String, CodingKey {
         case profileLabels, profileTags, favorites, refreshInterval
@@ -150,7 +154,7 @@ struct UserConfig: Codable, Sendable {
         case customTags, screenshotMode
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         profileLabels = try container.decode([String: String].self, forKey: .profileLabels)
         profileTags = try container.decode([String: ProfileTag].self, forKey: .profileTags)
@@ -164,7 +168,7 @@ struct UserConfig: Codable, Sendable {
         screenshotMode = try container.decodeIfPresent(Bool.self, forKey: .screenshotMode) ?? false
     }
 
-    init(
+    public init(
         profileLabels: [String: String],
         profileTags: [String: ProfileTag],
         favorites: [String],
@@ -188,7 +192,7 @@ struct UserConfig: Codable, Sendable {
         self.screenshotMode = screenshotMode
     }
 
-    static let `default` = UserConfig(
+    public static let `default` = UserConfig(
         profileLabels: [:],
         profileTags: [:],
         favorites: [],
@@ -202,17 +206,17 @@ struct UserConfig: Codable, Sendable {
     )
 
     /// Get the display label for a profile, falling back to the profile name
-    func displayLabel(for profileName: String) -> String {
+    public func displayLabel(for profileName: String) -> String {
         profileLabels[profileName] ?? profileName
     }
 
     /// Check if a profile is favorited
-    func isFavorite(_ profileName: String) -> Bool {
+    public func isFavorite(_ profileName: String) -> Bool {
         favorites.contains(profileName)
     }
 
     /// All available tags: built-in + custom
-    var allTags: [ProfileTag] {
+    public var allTags: [ProfileTag] {
         ProfileTag.builtInCases + customTags.map { .custom($0.name) }
     }
 }

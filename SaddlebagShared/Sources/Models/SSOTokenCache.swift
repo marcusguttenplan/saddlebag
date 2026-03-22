@@ -1,7 +1,7 @@
 import Foundation
 
 /// Status of an SSO session token
-enum TokenExpiryStatus: Sendable {
+public enum TokenExpiryStatus: Sendable {
     case valid
     case expiringSoon  // < 15 minutes remaining
     case expired
@@ -9,23 +9,23 @@ enum TokenExpiryStatus: Sendable {
 }
 
 /// A cached SSO token from ~/.aws/sso/cache/*.json
-struct SSOTokenCache: Sendable {
-    let accessToken: String
-    let expiresAt: Date
-    let region: String
-    let startUrl: String
+public struct SSOTokenCache: Sendable {
+    public let accessToken: String
+    public let expiresAt: Date
+    public let region: String
+    public let startUrl: String
 
-    var isExpired: Bool {
+    public var isExpired: Bool {
         expiresAt <= Date()
     }
 
     /// Time remaining until expiry
-    var timeRemaining: TimeInterval {
+    public var timeRemaining: TimeInterval {
         max(0, expiresAt.timeIntervalSinceNow)
     }
 
     /// Formatted time remaining string (e.g. "7h 42m" or "14m")
-    var timeRemainingFormatted: String {
+    public var timeRemainingFormatted: String {
         let remaining = timeRemaining
         if remaining <= 0 { return "Expired" }
 
@@ -39,21 +39,28 @@ struct SSOTokenCache: Sendable {
         }
     }
 
-    var expiryStatus: TokenExpiryStatus {
+    public var expiryStatus: TokenExpiryStatus {
         if isExpired { return .expired }
         if timeRemaining < 900 { return .expiringSoon }  // 15 minutes
         return .valid
     }
+
+    public init(accessToken: String, expiresAt: Date, region: String, startUrl: String) {
+        self.accessToken = accessToken
+        self.expiresAt = expiresAt
+        self.region = region
+        self.startUrl = startUrl
+    }
 }
 
 /// JSON structure of AWS SSO cache files
-struct SSOTokenCacheJSON: Decodable, Sendable {
-    let accessToken: String?
-    let expiresAt: String?
-    let region: String?
-    let startUrl: String?
+public struct SSOTokenCacheJSON: Decodable, Sendable {
+    public let accessToken: String?
+    public let expiresAt: String?
+    public let region: String?
+    public let startUrl: String?
 
-    func toTokenCache() -> SSOTokenCache? {
+    public func toTokenCache() -> SSOTokenCache? {
         guard let accessToken, let expiresAtStr = expiresAt, let startUrl else {
             return nil
         }

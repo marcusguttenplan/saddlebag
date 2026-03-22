@@ -1,18 +1,26 @@
 import Foundation
 
 /// Result of a shell command execution
-struct ShellResult: Sendable {
-    let stdout: String
-    let stderr: String
-    let exitCode: Int32
+public struct ShellResult: Sendable {
+    public let stdout: String
+    public let stderr: String
+    public let exitCode: Int32
 
-    var succeeded: Bool { exitCode == 0 }
+    public var succeeded: Bool { exitCode == 0 }
+
+    public init(stdout: String, stderr: String, exitCode: Int32) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exitCode = exitCode
+    }
 }
 
 /// Thin wrapper around Process for running CLI commands
-actor ShellService {
+public actor ShellService {
+    public init() {}
+
     /// Execute a shell command and return the result
-    func run(_ command: String) async throws -> ShellResult {
+    public func run(_ command: String) async throws -> ShellResult {
         let process = Process()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -45,15 +53,25 @@ actor ShellService {
         let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        return ShellResult(
+        let result = ShellResult(
             stdout: stdout,
             stderr: stderr,
             exitCode: process.terminationStatus
         )
+
+        guard result.succeeded else {
+            throw SaddlebagError.shellExecutionFailed(
+                command: command,
+                exitCode: result.exitCode,
+                stderr: result.stderr
+            )
+        }
+
+        return result
     }
 
     /// Execute a command and open a URL in the default browser
-    func openURL(_ url: String) {
+    public func openURL(_ url: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = [url]

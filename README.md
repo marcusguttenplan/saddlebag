@@ -1,78 +1,90 @@
 # Saddlebag
 
-A lightweight macOS menu bar app for managing multi-cloud credentials across **AWS** and **GCP** — all from one place.
+A native **macOS menu bar app** for managing multi-cloud credentials and developer context — all from one place.
 
 ## What It Does
 
 Saddlebag lives in your menu bar and gives you a unified view of your cloud accounts:
 
 - **AWS** — reads your `~/.aws/config` profiles, tracks SSO sessions and token expiry
-- **GCP** — reads `gcloud` configurations, shows active accounts and projects
+- **GCP** — reads `gcloud` configurations, switch active configs, trigger auth flows
 - **Quick switching** — swap active profiles and configurations without touching the terminal
 - **Auth flows** — trigger `gcloud auth login` and `gcloud auth application-default login` directly from the UI
 - **Settings** — manage project tags, labels, and per-account preferences
 - **Screenshot Mode** — obfuscate account IDs, emails, SSO URLs, and project IDs for safe screen sharing
 
+### Roadmap (POC)
+
+- **`sb` CLI** — Go companion CLI for shell integration, replacing the fragile `.zshrc` bridge
+- **Desks** — first-class context bundles (AWS profile + GCP config + git identity + SSH key + env vars)
+- **Credential health** — background monitoring with macOS notifications (🟢 → 🟡 → 🔴)
+- **Git identity guard** — pre-commit hook that blocks commits with wrong `user.email`
+
 ## Requirements
 
 - macOS 15.0+
-- Swift 6.0+
+- Xcode 16+ (Swift 6.0)
 - AWS CLI and/or `gcloud` CLI installed (for credential sources)
 
-## Build & Install
-
-Saddlebag uses **Swift Package Manager** and ships with a `Makefile` for convenience.
-
-```bash
-# Build release binary
-make build
-
-# Build + create Saddlebag.app bundle
-make bundle
-
-# Build + bundle + copy to /Applications
-make install
-
-# Build + install + launch
-make run
-
-# Remove build artifacts
-make clean
-```
-
-## Project Structure
+## Architecture
 
 ```
-Saddlebag/
-├── SaddlebagApp.swift          # App entry point (MenuBarExtra)
-├── Info.plist                  # App bundle metadata
-├── Models/
-│   ├── AWSProfile.swift        # AWS profile model
-│   ├── GCPConfiguration.swift  # GCP configuration model
-│   ├── SSOSession.swift        # AWS SSO session model
-│   ├── SSOTokenCache.swift     # SSO token cache model
-│   └── UserConfig.swift        # User preferences
-├── Services/
-│   ├── AWSConfigService.swift  # Parses ~/.aws/config
-│   ├── GCPConfigService.swift  # Reads gcloud configurations
-│   ├── Obfuscator.swift        # Data redaction for screenshot mode
-│   ├── SSOSessionService.swift # Manages SSO token lifecycle
-│   ├── ShellService.swift      # Shell command execution
-│   └── UserConfigService.swift # User config persistence
-├── ViewModels/
-│   └── AccountsViewModel.swift # Main view model
-└── Views/
-    ├── MenuBarView.swift       # Menu bar dropdown UI
-    ├── SettingsView.swift       # Settings window UI
-    ├── SettingsWindowManager.swift
-    └── Components/
-        ├── HorseshoeIcon.swift  # Custom app icon
-        └── ProfileRowView.swift # Reusable profile row
+_dev/
+├── Saddlebag.xcodeproj         # Xcode project
+├── SaddlebagShared/            # Shared Swift package (models + services)
+│   ├── Package.swift
+│   └── Sources/
+│       ├── Models/
+│       │   ├── AWSProfile.swift
+│       │   ├── GCPConfiguration.swift
+│       │   ├── SSOSession.swift
+│       │   ├── SSOTokenCache.swift
+│       │   ├── SaddlebagError.swift
+│       │   └── UserConfig.swift
+│       └── Services/
+│           ├── AWSConfigService.swift
+│           ├── GCPConfigService.swift
+│           ├── Obfuscator.swift
+│           ├── ShellService.swift
+│           ├── SSOSessionService.swift
+│           └── UserConfigService.swift
+├── Saddlebag/                  # Main app target
+│   ├── SaddlebagApp.swift
+│   ├── Info.plist
+│   ├── ViewModels/
+│   │   └── AccountsViewModel.swift
+│   └── Views/
+│       ├── MenuBarView.swift
+│       ├── SettingsView.swift
+│       ├── SettingsWindowManager.swift
+│       └── Components/
+│           ├── HorseshoeIcon.swift
+│           └── ProfileRowView.swift
+└── sb/                         # Go CLI (planned)
+    ├── go.mod
+    ├── .go-version
+    └── cmd/
 ```
+
+### Key design decisions
+
+- **Xcode project** — enables Widget Extension targets, App Groups, and proper code signing
+- **SaddlebagShared** — local Swift package shared between app and future widget targets
+- **`~/.saddlebag/`** — all user config lives here (not `~/Library/Application Support/`)
+  - `config.json` — user preferences (labels, tags, favorites)
+  - `state.json` — live state (active desk, AWS profile, GCP config)
+  - `desks/*.toml` — desk definitions (one per context)
+- **Go CLI** — `sb` companion binary, communicates with app via Unix socket at `/tmp/saddlebag.sock`
+
+## Build & Run
+
+Open `Saddlebag.xcodeproj` in Xcode and build (⌘B) / run (⌘R).
+
+The app runs as a menu bar agent (`LSUIElement = YES`) — no Dock icon, just the menu bar.
 
 ## Screenshot Mode
 
-Toggle **Settings → General → Obfuscate sensitive data** to redact sensitive information across the entire UI. This lets you safely take screenshots or record demos without exposing real credentials.
+Toggle **Settings → General → Obfuscate sensitive data** to redact sensitive information across the entire UI.
 
 | Data Type | Example | Redacted |
 |-----------|---------|----------|

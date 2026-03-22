@@ -1,4 +1,5 @@
 import SwiftUI
+import SaddlebagShared
 
 /// Reusable row component for AWS profiles and GCP configurations
 struct ProfileRowView: View {
