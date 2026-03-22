@@ -10,10 +10,11 @@ import (
 type ResolveTier string
 
 const (
-	TierShell  ResolveTier = "shell"
-	TierLocal  ResolveTier = "local"
-	TierGlobal ResolveTier = "global"
-	TierNone   ResolveTier = "none"
+	TierShell   ResolveTier = "shell"
+	TierLocal   ResolveTier = "local"
+	TierWorkdir ResolveTier = "workdir"
+	TierGlobal  ResolveTier = "global"
+	TierNone    ResolveTier = "none"
 )
 
 const DeskFileName = ".desk"
@@ -39,6 +40,43 @@ func FindDeskFile(startDir string) (deskID string, foundAt string) {
 		}
 		dir = parent
 	}
+}
+
+// FindDeskByWorkingDir checks if the given directory is under any desk's configured workingDir.
+// Returns the desk ID if found, empty string otherwise.
+func FindDeskByWorkingDir(dir string) string {
+	desks, err := LoadAll()
+	if err != nil {
+		return ""
+	}
+
+	// Normalize the search directory
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+
+	for id, d := range desks {
+		wd := d.DeskMeta.WorkingDir
+		if wd == "" {
+			continue
+		}
+		// Expand ~ in workingDir
+		if strings.HasPrefix(wd, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				wd = filepath.Join(home, wd[2:])
+			}
+		}
+		absWD, err := filepath.Abs(wd)
+		if err != nil {
+			continue
+		}
+		// Check if dir is the workingDir or a subdirectory of it
+		if absDir == absWD || strings.HasPrefix(absDir, absWD+string(filepath.Separator)) {
+			return id
+		}
+	}
+	return ""
 }
 
 // WriteDeskFile creates a .desk file in the given directory

@@ -17,13 +17,13 @@ import (
 var deskCmd = &cobra.Command{
 	Use:   "desk",
 	Short: "Manage desk context (global, local, or show current)",
-	Long: `Manage desk context using a three-tier resolution model:
+	Long: `Manage desk context using a four-tier resolution model:
 
   sb desk              Show the currently resolved desk and its tier
   sb desk global <d>   Set the machine-wide default desk
   sb desk local <d>    Set a per-directory desk (writes .desk file)
 
-Resolution priority: shell ($SADDLEBAG_DESK) → local (.desk) → global (state.json)`,
+Resolution priority: shell ($SADDLEBAG_DESK) → local (.desk) → workdir (desk config) → global (state.json)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// No subcommand: show current resolved desk
 		deskID, tier, source := resolveCurrentDesk()
@@ -127,14 +127,19 @@ func resolveCurrentDesk() (deskID string, tier desk.ResolveTier, source string) 
 		return env, desk.TierShell, "$SADDLEBAG_DESK"
 	}
 
-	// Tier 2: Local .desk file
 	if cwd, err := os.Getwd(); err == nil {
+		// Tier 2: Local .desk file
 		if id, foundAt := desk.FindDeskFile(cwd); id != "" {
 			return id, desk.TierLocal, foundAt
 		}
+
+		// Tier 3: Working directory match
+		if id := desk.FindDeskByWorkingDir(cwd); id != "" {
+			return id, desk.TierWorkdir, "workdir match"
+		}
 	}
 
-	// Tier 3: Global state
+	// Tier 4: Global state
 	if s, err := state.Read(); err == nil && s.ActiveDesk != "" {
 		return s.ActiveDesk, desk.TierGlobal, "~/.saddlebag/state.json"
 	}

@@ -12,7 +12,8 @@ lint:
 	golangci-lint run
 
 install: build
-	cp bin/sb /usr/local/bin/sb
+	mkdir -p $(HOME)/.local/bin
+	cp bin/sb $(HOME)/.local/bin/sb
 
 clean:
 	rm -rf bin/

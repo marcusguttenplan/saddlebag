@@ -15,16 +15,18 @@ var envCmd = &cobra.Command{
 	Short: "Print managed environment variables as shell exports",
 	Long: `Print shell export statements for the resolved desk's environment.
 
-Resolution priority: shell ($SADDLEBAG_DESK) → local (.desk) → global (state.json)
+Resolution priority: shell ($SADDLEBAG_DESK) → local (.desk) → workdir (desk config) → global (state.json)
 
 Designed to be used with eval:
   eval "$(sb env)"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Three-tier resolution
+		// Four-tier resolution
 		deskID, tier := resolveDeskForEnv()
 
 		if deskID == "" {
-			return nil // No desk active
+			// No desk — clear theme vars
+			fmt.Println("unset SADDLEBAG_DESK_ID SADDLEBAG_DESK_NAME SADDLEBAG_DESK_TIER SADDLEBAG_AWS_PROFILE SADDLEBAG_GCP_CONFIG SADDLEBAG_GIT_EMAIL 2>/dev/null")
+			return nil
 		}
 
 		// Load the resolved desk
@@ -42,11 +44,7 @@ Designed to be used with eval:
 			return nil
 		}
 
-		// Export desk identity
-		if tier != desk.TierShell {
-			// Don't re-export if already set by sb use
-			fmt.Printf("export SADDLEBAG_DESK=%q\n", deskID)
-		}
+		// --- Functional env vars ---
 
 		// AWS
 		if d.AWS != nil && d.AWS.Profile != "" {
@@ -75,12 +73,38 @@ Designed to be used with eval:
 			fmt.Printf("export %s=%q\n", k, v)
 		}
 
+		// --- Theme vars (SADDLEBAG_* for prompt/theme consumption) ---
+		// Note: SADDLEBAG_DESK is only set by `sb use` (shell pin).
+		// SADDLEBAG_DESK_ID is the informational current desk.
+
+		fmt.Printf("export SADDLEBAG_DESK_ID=%q\n", deskID)
+		fmt.Printf("export SADDLEBAG_DESK_NAME=%q\n", d.DeskMeta.Name)
+		fmt.Printf("export SADDLEBAG_DESK_TIER=%q\n", string(tier))
+
+		if d.AWS != nil && d.AWS.Profile != "" {
+			fmt.Printf("export SADDLEBAG_AWS_PROFILE=%q\n", d.AWS.Profile)
+		} else {
+			fmt.Println("unset SADDLEBAG_AWS_PROFILE 2>/dev/null")
+		}
+
+		if d.GCP != nil && d.GCP.Config != "" {
+			fmt.Printf("export SADDLEBAG_GCP_CONFIG=%q\n", d.GCP.Config)
+		} else {
+			fmt.Println("unset SADDLEBAG_GCP_CONFIG 2>/dev/null")
+		}
+
+		if d.Git != nil && d.Git.Email != "" {
+			fmt.Printf("export SADDLEBAG_GIT_EMAIL=%q\n", d.Git.Email)
+		} else {
+			fmt.Println("unset SADDLEBAG_GIT_EMAIL 2>/dev/null")
+		}
+
 		return nil
 	},
 }
 
 func resolveDeskForEnv() (string, desk.ResolveTier) {
-	// Tier 1: Shell override
+	// Tier 1: Shell pin ($SADDLEBAG_DESK, only set by `sb use`)
 	if env := os.Getenv("SADDLEBAG_DESK"); env != "" {
 		return env, desk.TierShell
 	}
@@ -90,9 +114,14 @@ func resolveDeskForEnv() (string, desk.ResolveTier) {
 		if id, _ := desk.FindDeskFile(cwd); id != "" {
 			return id, desk.TierLocal
 		}
+
+		// Tier 3: Working directory match (desk config)
+		if id := desk.FindDeskByWorkingDir(cwd); id != "" {
+			return id, desk.TierWorkdir
+		}
 	}
 
-	// Tier 3: Global state
+	// Tier 4: Global state
 	if s, err := state.Read(); err == nil && s.ActiveDesk != "" {
 		return s.ActiveDesk, desk.TierGlobal
 	}

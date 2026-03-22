@@ -13,10 +13,20 @@ sb() {
   esac
 }
 
+# Track last directory to detect cd and re-resolve desk
+_saddlebag_last_dir=""
+
 _saddlebag_refresh() {
-  # Skip global sync if this session has a pinned desk
-  if [[ -z "$SADDLEBAG_DESK" ]]; then
+  # $SADDLEBAG_DESK is the shell pin (only set by `sb use`)
+  # If pinned, never re-resolve — the user explicitly chose this desk
+  if [[ -n "$SADDLEBAG_DESK" ]]; then
+    return
+  fi
+
+  # Re-resolve on every directory change (workdir/local tier may change)
+  if [[ "$PWD" != "$_saddlebag_last_dir" ]]; then
     eval "$(command sb env 2>/dev/null)"
+    _saddlebag_last_dir="$PWD"
   fi
 }
 
@@ -28,4 +38,5 @@ else
 fi
 
 # Initial load
-_saddlebag_refresh
+eval "$(command sb env 2>/dev/null)"
+_saddlebag_last_dir="$PWD"
