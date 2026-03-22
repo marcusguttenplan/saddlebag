@@ -37,6 +37,7 @@ final class AccountsViewModel {
     private let ssoSessionService: SSOSessionService
     private let userConfigService = UserConfigService()
     private let deskService: DeskService
+    private let healthMonitor = CredentialHealthMonitor()
 
     private var refreshTimer: Timer?
 
@@ -44,6 +45,7 @@ final class AccountsViewModel {
         self.gcpConfigService = GCPConfigService(shell: shell)
         self.ssoSessionService = SSOSessionService(shell: shell)
         self.deskService = DeskService(shell: shell, gcpConfigService: gcpConfigService, userConfigService: userConfigService)
+        healthMonitor.requestPermission()
     }
 
     // MARK: - Computed
@@ -126,6 +128,7 @@ final class AccountsViewModel {
 
         // Load SSO token statuses
         tokenStatuses = await ssoSessionService.loadTokenStatuses(for: ssoSessions)
+        healthMonitor.evaluate(sessions: tokenStatuses)
 
         // Load GCP data concurrently
         do {
@@ -543,6 +546,7 @@ final class AccountsViewModel {
             Task { @MainActor in
                 // Only refresh token statuses, not full config reload
                 self.tokenStatuses = await self.ssoSessionService.loadTokenStatuses(for: self.ssoSessions)
+                self.healthMonitor.evaluate(sessions: self.tokenStatuses)
             }
         }
     }
