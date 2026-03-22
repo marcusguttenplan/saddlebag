@@ -167,19 +167,28 @@ final class AccountsViewModel {
         }
 
         isLoading = false
+        writeSharedState()
     }
 
     /// Login to an AWS SSO profile
     func loginAWS(profile: AWSProfile) async {
         isLoggingIn = true
+        lastError = nil
+        defer { isLoggingIn = false }
+
+        // Copy SSO URL to clipboard as fallback if browser fails
+        if let session = ssoSessions.first(where: { $0.name == profile.ssoSessionName }) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(session.startUrl, forType: .string)
+        }
+
         do {
             try await ssoSessionService.login(profileName: profile.name)
             try await userConfigService.setActiveProfile(profile.name)
             await refresh()
         } catch {
-            lastError = error.localizedDescription
+            lastError = "SSO login failed: \(error.localizedDescription). SSO URL copied to clipboard — paste in your preferred browser."
         }
-        isLoggingIn = false
     }
 
     /// Login to an entire SSO portal (authenticates all profiles under it)
@@ -197,6 +206,7 @@ final class AccountsViewModel {
         do {
             try await userConfigService.setActiveProfile(profile.name)
             userConfig = await userConfigService.getConfig()
+            writeSharedState()
         } catch {
             lastError = error.localizedDescription
         }
@@ -207,6 +217,7 @@ final class AccountsViewModel {
         do {
             try await gcpConfigService.activate(configName: config.name)
             await refresh()
+            writeSharedState()
         } catch {
             lastError = error.localizedDescription
         }
@@ -454,6 +465,22 @@ final class AccountsViewModel {
         }
         if let nsUrl = URL(string: url) {
             NSWorkspace.shared.open(nsUrl)
+        }
+    }
+
+    // MARK: - Shared State
+
+    /// Write current state to ~/.saddlebag/state.json for CLI
+    private func writeSharedState() {
+        let activeGCPConfig = gcpConfigurations.first(where: { $0.isActive })?.name
+        let state = SharedState(
+            awsProfile: userConfig.activeAWSProfile,
+            gcpConfig: activeGCPConfig
+        )
+        do {
+            try state.write()
+        } catch {
+            print("[SharedState] Failed to write: \(error)")
         }
     }
 
