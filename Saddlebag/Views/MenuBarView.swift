@@ -160,6 +160,9 @@ struct MenuBarView: View {
 
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Active desk indicator
+            deskIndicator
+
             // Active AWS profile
             if let activeProfileName = viewModel.userConfig.activeAWSProfile,
                let activeProfile = viewModel.awsProfiles.first(where: { $0.name == activeProfileName }) {
@@ -263,6 +266,72 @@ struct MenuBarView: View {
                 .padding(.horizontal, 16)
             }
         }
+    }
+
+    // MARK: - Desk Indicator
+
+    private var deskIndicator: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            if let desk = viewModel.activeDesk {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(desk.name)
+                        .font(.system(.body, weight: .semibold))
+                    HStack(spacing: 6) {
+                        if let aws = desk.awsProfile {
+                            Text(viewModel.redact(aws, as: .generic))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let gcp = desk.gcpConfig {
+                            Text(viewModel.redact(gcp, as: .generic))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text("No active desk")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            if viewModel.activeDesk != nil {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 8, height: 8)
+            }
+
+            if !viewModel.desks.isEmpty {
+                Menu {
+                    ForEach(viewModel.desks) { desk in
+                        Button {
+                            Task { await viewModel.switchDesk(desk) }
+                        } label: {
+                            HStack {
+                                Text(desk.name)
+                                if desk.id == viewModel.activeDesk?.id {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.triangle.swap")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 20)
+            }
+        }
+        .padding(.horizontal, 16)
     }
 
     private func overviewDotColor(for tokenCache: SSOTokenCache?) -> Color {
@@ -391,7 +460,7 @@ struct MenuBarView: View {
                     title: "GCP",
                     icon: "globe",
                     isExpanded: gcpPlatformExpanded,
-                    count: viewModel.gcpAccounts.count,
+                    count: viewModel.gcpProjectsByAccount.values.reduce(0) { $0 + $1.count },
                     onToggle: { withAnimation(.easeInOut(duration: 0.15)) { gcpPlatformExpanded.toggle() } }
                 )
 
@@ -587,23 +656,11 @@ struct MenuBarView: View {
 
             Spacer()
 
-            if let activeProfile = viewModel.userConfig.activeAWSProfile,
-               let profile = viewModel.awsProfiles.first(where: { $0.name == activeProfile }) {
-                Button("Copy Env") {
-                    viewModel.copyEnvVars(for: profile)
-                }
-                .buttonStyle(.borderless)
-                .font(.system(size: 12))
-            }
-
-            Button {
-                SettingsWindowManager.shared.open(viewModel: viewModel)
-            } label: {
-                Image(systemName: "gear")
-                    .font(.system(size: 12))
+            Button("Open Saddlebag") {
+                AppWindowManager.shared.open(viewModel: viewModel)
             }
             .buttonStyle(.borderless)
-            .help("Settings")
+            .font(.system(size: 12, weight: .medium))
 
             Button {
                 NSApplication.shared.terminate(nil)

@@ -1,37 +1,39 @@
 import SwiftUI
 import AppKit
 
-/// Manages the settings window lifecycle
+/// Manages the main app window lifecycle (Tailscale-style)
 @MainActor
-final class SettingsWindowManager: NSObject, NSWindowDelegate {
-    static let shared = SettingsWindowManager()
+final class AppWindowManager: NSObject, NSWindowDelegate {
+    static let shared = AppWindowManager()
 
     private var window: NSWindow?
 
     func open(viewModel: AccountsViewModel) {
-        // If window exists, bring it to front regardless of state
+        // If window exists, bring it to front
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        // Create the SwiftUI view
-        let settingsView = SettingsView(viewModel: viewModel)
-        let hostingView = NSHostingView(rootView: settingsView)
+        // Create the main app view
+        let mainView = MainAppView(viewModel: viewModel)
+        let hostingView = NSHostingView(rootView: mainView)
 
         // Create window
         let newWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 540),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        newWindow.title = "Saddlebag Settings"
+        newWindow.title = "Saddlebag"
         newWindow.contentView = hostingView
         newWindow.center()
         newWindow.isReleasedWhenClosed = false
         newWindow.delegate = self
+        newWindow.titlebarAppearsTransparent = true
+        newWindow.toolbarStyle = .unified
 
         // Activate app and show window
         NSApp.setActivationPolicy(.accessory)
@@ -41,7 +43,7 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         self.window = newWindow
     }
 
-    /// Bring all Saddlebag windows to front (called when menubar panel opens)
+    /// Bring window to front if visible
     func bringAllToFront() {
         if let window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
@@ -52,7 +54,6 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
     // MARK: - NSWindowDelegate
 
     func windowDidBecomeMain(_ notification: Notification) {
-        // Ensure the app stays activated when the window gains focus
         NSApp.activate(ignoringOtherApps: true)
     }
 

@@ -54,6 +54,11 @@ final class AccountsViewModel {
     var menuBarLabel: String {
         var parts: [String] = []
 
+        // Show active desk name as first element
+        if let desk = activeDesk {
+            parts.append(desk.name)
+        }
+
         if userConfig.showAWSAccountInMenuBar, let activeProfile = userConfig.activeAWSProfile {
             parts.append(redact(userConfig.displayLabel(for: activeProfile), as: .generic))
         }
@@ -258,6 +263,29 @@ final class AccountsViewModel {
         } catch {
             // Non-fatal: desks are optional
             print("[Desks] Failed to load: \(error)")
+        }
+    }
+
+    /// Save (create or update) a desk definition
+    func saveDesk(_ desk: Desk) async {
+        do {
+            try await deskService.save(desk)
+            await loadDesks()
+        } catch {
+            lastError = "Failed to save desk: \(error.localizedDescription)"
+        }
+    }
+
+    /// Delete a desk definition
+    func deleteDesk(_ desk: Desk) async {
+        do {
+            try await deskService.delete(desk)
+            if activeDesk?.id == desk.id {
+                activeDesk = nil
+            }
+            await loadDesks()
+        } catch {
+            lastError = "Failed to delete desk: \(error.localizedDescription)"
         }
     }
 
