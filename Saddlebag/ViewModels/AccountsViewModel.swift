@@ -40,6 +40,7 @@ final class AccountsViewModel {
     private let healthMonitor = CredentialHealthMonitor()
 
     private var refreshTimer: Timer?
+    private var stateFileWatcher: DispatchSourceFileSystemObject?
 
     init() {
         self.gcpConfigService = GCPConfigService(shell: shell)
@@ -105,6 +106,8 @@ final class AccountsViewModel {
     func stop() {
         refreshTimer?.invalidate()
         refreshTimer = nil
+        stateFileWatcher?.cancel()
+        stateFileWatcher = nil
     }
 
     // MARK: - Actions
@@ -243,6 +246,8 @@ final class AccountsViewModel {
 
     /// Switch to a desk by ID (used by IPC)
     func switchDeskByID(_ id: String) async -> Bool {
+        // Reload desks to ensure we have fresh data
+        await loadDesks()
         guard let desk = desks.first(where: { $0.id == id }) else {
             lastError = "Desk '\(id)' not found"
             return false
@@ -577,5 +582,40 @@ final class AccountsViewModel {
                 self.healthMonitor.evaluate(sessions: self.tokenStatuses)
             }
         }
+
+        // Watch state.json for external changes (e.g. sb desk global)
+        startStateFileWatcher()
+    }
+
+    private func startStateFileWatcher() {
+        stateFileWatcher?.cancel()
+
+        let statePath = "\(NSHomeDirectory())/.saddlebag/state.json"
+
+        // Ensure the file exists before watching
+        guard FileManager.default.fileExists(atPath: statePath) else { return }
+
+        let fd = open(statePath, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename],
+            queue: .main
+        )
+
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.loadDesks()
+            }
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        source.resume()
+        stateFileWatcher = source
     }
 }

@@ -1,30 +1,23 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"github.com/marcusguttenplan/sb/internal/ipc"
 )
 
 var switchCmd = &cobra.Command{
-	Use:   "switch <desk>",
-	Short: "Switch to a different desk (context)",
-	Args:  cobra.ExactArgs(1),
+	Use:        "switch <desk>",
+	Short:      "Switch to a different desk (alias for 'desk global')",
+	Args:       cobra.ExactArgs(1),
+	Deprecated: "use 'sb desk global <desk>' instead",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		deskName := args[0]
-
-		resp, err := ipc.Send(context.Background(), ipc.Command{
-			Action: "switch",
-			Desk:   deskName,
-		})
-		if err != nil {
-			return fmt.Errorf("switching desk: %w", err)
+		// Delegate to desk global
+		deskGlobalCmd.SetArgs(args)
+		if err := deskGlobalCmd.RunE(deskGlobalCmd, args); err != nil {
+			return err
 		}
-
-		fmt.Printf("Switched to %s: %s\n", deskName, resp.Message)
+		fmt.Println("Note: 'sb switch' is deprecated. Use 'sb desk global' instead.")
 		return nil
 	},
 }

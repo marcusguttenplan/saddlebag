@@ -22,7 +22,8 @@ type Desk struct {
 }
 
 type DeskMeta struct {
-	Name string `toml:"name"`
+	Name       string `toml:"name"`
+	WorkingDir string `toml:"working_dir,omitempty"`
 }
 
 type AWSConfig struct {

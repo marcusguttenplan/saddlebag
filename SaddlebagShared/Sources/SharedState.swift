@@ -31,8 +31,12 @@ public struct SharedState: Codable, Sendable {
 
     /// Read the current state from disk
     public static func read() -> SharedState {
-        guard let data = FileManager.default.contents(atPath: statePath),
-              let state = try? JSONDecoder().decode(SharedState.self, from: data) else {
+        guard let data = FileManager.default.contents(atPath: statePath) else {
+            return SharedState()
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let state = try? decoder.decode(SharedState.self, from: data) else {
             return SharedState()
         }
         return state
