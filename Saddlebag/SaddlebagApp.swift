@@ -24,6 +24,9 @@ struct SaddlebagApp: App {
             Image(nsImage: SaddleIcon.menuBarImage())
             if !viewModel.menuBarLabel.isEmpty {
                 Text(viewModel.menuBarLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .baselineOffset(-0.5)
+                    .padding(.leading, 2)
             }
         }
         .menuBarExtraStyle(.window)

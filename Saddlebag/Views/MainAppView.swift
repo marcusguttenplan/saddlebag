@@ -553,20 +553,8 @@ struct GeneralSettingsView: View {
                         await viewModel.updateMenuBarDisplay(
                             aws: newVal,
                             time: viewModel.userConfig.showTimeRemainingInMenuBar,
-                            gcp: viewModel.userConfig.showGCPProjectInMenuBar
-                        )
-                    }
-                }
-            ))
-
-            Toggle("Time Remaining", isOn: Binding(
-                get: { viewModel.userConfig.showTimeRemainingInMenuBar },
-                set: { newVal in
-                    Task {
-                        await viewModel.updateMenuBarDisplay(
-                            aws: viewModel.userConfig.showAWSAccountInMenuBar,
-                            time: newVal,
-                            gcp: viewModel.userConfig.showGCPProjectInMenuBar
+                            gcp: viewModel.userConfig.showGCPProjectInMenuBar,
+                            desk: viewModel.userConfig.showDeskInMenuBar
                         )
                     }
                 }
@@ -579,11 +567,41 @@ struct GeneralSettingsView: View {
                         await viewModel.updateMenuBarDisplay(
                             aws: viewModel.userConfig.showAWSAccountInMenuBar,
                             time: viewModel.userConfig.showTimeRemainingInMenuBar,
-                            gcp: newVal
+                            gcp: newVal,
+                            desk: viewModel.userConfig.showDeskInMenuBar
                         )
                     }
                 }
             ))
+
+            Toggle("Active Desk", isOn: Binding(
+                get: { viewModel.userConfig.showDeskInMenuBar },
+                set: { newVal in
+                    Task {
+                        await viewModel.updateMenuBarDisplay(
+                            aws: viewModel.userConfig.showAWSAccountInMenuBar,
+                            time: viewModel.userConfig.showTimeRemainingInMenuBar,
+                            gcp: viewModel.userConfig.showGCPProjectInMenuBar,
+                            desk: newVal
+                        )
+                    }
+                }
+            ))
+
+            Toggle("Time Remaining", isOn: Binding(
+                get: { viewModel.userConfig.showTimeRemainingInMenuBar },
+                set: { newVal in
+                    Task {
+                        await viewModel.updateMenuBarDisplay(
+                            aws: viewModel.userConfig.showAWSAccountInMenuBar,
+                            time: newVal,
+                            gcp: viewModel.userConfig.showGCPProjectInMenuBar,
+                            desk: viewModel.userConfig.showDeskInMenuBar
+                        )
+                    }
+                }
+            ))
+
         }
     }
 

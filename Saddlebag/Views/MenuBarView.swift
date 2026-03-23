@@ -77,6 +77,29 @@ struct MenuBarView: View {
         .task {
             await viewModel.start()
         }
+        .overlay(alignment: .top) {
+            if let toast = viewModel.clipboardToast {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text(toast)
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .shadow(radius: 4)
+                .padding(.top, 50)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .onAppear {
+                    Task {
+                        try? await Task.sleep(for: .seconds(3))
+                        withAnimation { viewModel.clipboardToast = nil }
+                    }
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: viewModel.clipboardToast)
         .onChange(of: viewModel.groupedAWSProfiles.count) {
             initializeExpansionIfNeeded()
         }

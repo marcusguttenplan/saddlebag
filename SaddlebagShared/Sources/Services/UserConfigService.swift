@@ -67,10 +67,11 @@ public actor UserConfigService {
     }
 
     /// Update menubar display settings
-    public func setMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) throws {
+    public func setMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool, desk: Bool) throws {
         config.showAWSAccountInMenuBar = aws
         config.showTimeRemainingInMenuBar = time
         config.showGCPProjectInMenuBar = gcp
+        config.showDeskInMenuBar = desk
         try save()
     }
 

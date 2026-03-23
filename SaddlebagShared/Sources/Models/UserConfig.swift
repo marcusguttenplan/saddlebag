@@ -140,6 +140,7 @@ public struct UserConfig: Codable, Sendable {
     public var showAWSAccountInMenuBar: Bool
     public var showTimeRemainingInMenuBar: Bool
     public var showGCPProjectInMenuBar: Bool
+    public var showDeskInMenuBar: Bool
 
     /// User-created custom tags
     public var customTags: [CustomTag]
@@ -150,7 +151,7 @@ public struct UserConfig: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case profileLabels, profileTags, favorites, refreshInterval
         case activeAWSProfile, showAWSAccountInMenuBar
-        case showTimeRemainingInMenuBar, showGCPProjectInMenuBar
+        case showTimeRemainingInMenuBar, showGCPProjectInMenuBar, showDeskInMenuBar
         case customTags, screenshotMode
     }
 
@@ -164,6 +165,7 @@ public struct UserConfig: Codable, Sendable {
         showAWSAccountInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showAWSAccountInMenuBar) ?? false
         showTimeRemainingInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showTimeRemainingInMenuBar) ?? false
         showGCPProjectInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showGCPProjectInMenuBar) ?? false
+        showDeskInMenuBar = try container.decodeIfPresent(Bool.self, forKey: .showDeskInMenuBar) ?? false
         customTags = try container.decodeIfPresent([CustomTag].self, forKey: .customTags) ?? []
         screenshotMode = try container.decodeIfPresent(Bool.self, forKey: .screenshotMode) ?? false
     }
@@ -177,6 +179,7 @@ public struct UserConfig: Codable, Sendable {
         showAWSAccountInMenuBar: Bool,
         showTimeRemainingInMenuBar: Bool,
         showGCPProjectInMenuBar: Bool,
+        showDeskInMenuBar: Bool,
         customTags: [CustomTag],
         screenshotMode: Bool = false
     ) {
@@ -188,6 +191,7 @@ public struct UserConfig: Codable, Sendable {
         self.showAWSAccountInMenuBar = showAWSAccountInMenuBar
         self.showTimeRemainingInMenuBar = showTimeRemainingInMenuBar
         self.showGCPProjectInMenuBar = showGCPProjectInMenuBar
+        self.showDeskInMenuBar = showDeskInMenuBar
         self.customTags = customTags
         self.screenshotMode = screenshotMode
     }
@@ -201,6 +205,7 @@ public struct UserConfig: Codable, Sendable {
         showAWSAccountInMenuBar: false,
         showTimeRemainingInMenuBar: false,
         showGCPProjectInMenuBar: false,
+        showDeskInMenuBar: false,
         customTags: [],
         screenshotMode: false
     )

@@ -4,6 +4,8 @@ import Foundation
 public actor SSOSessionService {
     private let shell: ShellService
     private let cachePath: String
+    /// Active login process (so we can cancel/retry)
+    private var loginProcess: Process?
 
     public init(shell: ShellService, cachePath: String? = nil) {
         self.shell = shell
@@ -31,7 +33,6 @@ public actor SSOSessionService {
                     allTokens.append(token)
                 }
             } catch {
-                // Skip invalid cache files (some are OIDC registrations, not tokens)
                 continue
             }
         }
@@ -39,13 +40,10 @@ public actor SSOSessionService {
         // Match tokens to sessions by startUrl — pick the best (latest-expiring valid) token
         for session in sessions {
             let sessionUrl = normalizeUrl(session.startUrl)
-
             let matchingTokens = allTokens.filter { normalizeUrl($0.startUrl) == sessionUrl }
 
-            // Prefer non-expired tokens; among those, pick the one expiring latest
             let best = matchingTokens
                 .sorted { a, b in
-                    // Non-expired tokens first, then by latest expiry
                     if a.isExpired != b.isExpired { return !a.isExpired }
                     return a.expiresAt > b.expiresAt
                 }
@@ -65,18 +63,93 @@ public actor SSOSessionService {
         sessions: [SSOSession],
         tokenStatuses: [String: SSOTokenCache]
     ) -> SSOTokenCache? {
-        // Find the session for this profile
         guard let session = sessions.first(where: { $0.name == profile.ssoSessionName }) else {
             return nil
         }
-
-        // Check if we have a token for this session
         return tokenStatuses[session.name]
     }
 
-    /// Initiate SSO login for a profile
-    public func login(profileName: String) async throws {
-        _ = try await shell.run("aws sso login --profile \(profileName)")
+    /// Initiate SSO login for a profile.
+    ///
+    /// Uses the BROWSER env var trick: sets BROWSER to a script that writes
+    /// the device auth URL to a temp file instead of opening a browser.
+    /// This lets us reliably capture the URL without parsing stdout.
+    ///
+    /// Returns the device authorization URL, or nil if not captured.
+    /// Calling this again cancels any previous in-flight login.
+    public func login(profileName: String) async throws -> String? {
+        // Kill any previous login process so this is retryable
+        loginProcess?.terminate()
+        loginProcess = nil
+
+        // Temp file where the "browser" script will write the URL
+        let urlFile = NSTemporaryDirectory() + "saddlebag_sso_url_\(ProcessInfo.processInfo.processIdentifier)"
+
+        // Clean up any previous URL file
+        try? FileManager.default.removeItem(atPath: urlFile)
+
+        // Create a tiny script that captures the URL instead of opening a browser
+        let browserScript = NSTemporaryDirectory() + "saddlebag_browser_\(ProcessInfo.processInfo.processIdentifier)"
+        let scriptContent = "#!/bin/sh\necho \"$1\" > \"\(urlFile)\"\n"
+        try scriptContent.write(toFile: browserScript, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: browserScript)
+
+        let process = Process()
+        let outputPipe = Pipe()
+
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", "aws sso login --profile \(profileName) 2>&1"]
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        // Set up PATH and BROWSER
+        var environment = ProcessInfo.processInfo.environment
+        let path = environment["PATH"] ?? ""
+        let additionalPaths = [
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/sbin",
+            "\(NSHomeDirectory())/.local/bin"
+        ]
+        environment["PATH"] = (additionalPaths + [path]).joined(separator: ":")
+        // Redirect browser opening to our capture script
+        environment["BROWSER"] = browserScript
+        process.environment = environment
+
+        loginProcess = process
+        try process.run()
+
+        // Wait briefly for the URL to be written by the browser script
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(250))
+            if FileManager.default.fileExists(atPath: urlFile) {
+                if let url = try? String(contentsOfFile: urlFile, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !url.isEmpty {
+                    // Clean up
+                    try? FileManager.default.removeItem(atPath: urlFile)
+                    try? FileManager.default.removeItem(atPath: browserScript)
+
+                    // Let the process continue in background waiting for auth
+                    Task.detached { [weak process] in
+                        process?.waitUntilExit()
+                    }
+
+                    return url
+                }
+            }
+        }
+
+        // Clean up if URL wasn't captured
+        try? FileManager.default.removeItem(atPath: urlFile)
+        try? FileManager.default.removeItem(atPath: browserScript)
+
+        // Let process continue in background
+        Task.detached { [weak process] in
+            process?.waitUntilExit()
+        }
+
+        return nil
     }
 
     /// Check if a specific profile has a valid (non-expired) session
@@ -93,7 +166,6 @@ public actor SSOSessionService {
 
     // MARK: - Private
 
-    /// Normalize a URL for comparison (strip trailing slashes, fragments, query params)
     private func normalizeUrl(_ urlString: String) -> String {
         guard var components = URLComponents(string: urlString) else {
             return urlString.lowercased()

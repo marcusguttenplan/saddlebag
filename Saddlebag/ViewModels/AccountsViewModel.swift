@@ -24,6 +24,7 @@ final class AccountsViewModel {
     var isLoading = false
     var isLoggingIn = false
     var lastError: String?
+    var clipboardToast: String?
 
     // Desk state
     var desks: [Desk] = []
@@ -56,7 +57,7 @@ final class AccountsViewModel {
         var parts: [String] = []
 
         // Show active desk name as first element
-        if let desk = activeDesk {
+        if userConfig.showDeskInMenuBar, let desk = activeDesk {
             parts.append(desk.name)
         }
 
@@ -84,16 +85,6 @@ final class AccountsViewModel {
     /// Favorite profiles (from both AWS and GCP)
     var favoriteProfiles: [AWSProfile] {
         awsProfiles.filter { userConfig.isFavorite($0.name) }
-    }
-
-    /// Menubar icon based on session status
-    var menuBarIcon: String {
-        let hasExpiring = tokenStatuses.values.contains { $0.expiryStatus == .expiringSoon }
-        let allExpired = !tokenStatuses.isEmpty && tokenStatuses.values.allSatisfy { $0.isExpired }
-
-        if allExpired { return "exclamationmark.icloud" }
-        if hasExpiring { return "icloud.slash" }
-        return "cloud.fill"
     }
 
     // MARK: - Lifecycle
@@ -188,24 +179,36 @@ final class AccountsViewModel {
         writeSharedState()
     }
 
-    /// Login to an AWS SSO profile
+    /// Login to an AWS SSO profile — idempotent, always retryable
     func loginAWS(profile: AWSProfile) async {
         isLoggingIn = true
         lastError = nil
         defer { isLoggingIn = false }
 
-        // Copy SSO URL to clipboard as fallback if browser fails
-        if let session = ssoSessions.first(where: { $0.name == profile.ssoSessionName }) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.startUrl, forType: .string)
-        }
-
         do {
-            try await ssoSessionService.login(profileName: profile.name)
-            try await userConfigService.setActiveProfile(profile.name)
-            await refresh()
+            let deviceURL = try await ssoSessionService.login(profileName: profile.name)
+
+            if let urlString = deviceURL {
+                // Copy device auth URL to clipboard — user pastes into correct browser profile
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(urlString, forType: .string)
+                clipboardToast = "SSO URL copied — paste in your browser"
+            } else {
+                // Fallback: copy SSO start URL
+                if let session = ssoSessions.first(where: { $0.name == profile.ssoSessionName }) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(session.startUrl, forType: .string)
+                    clipboardToast = "SSO portal URL copied — paste in your browser"
+                }
+            }
+
+            // Refresh after a delay to pick up new tokens
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                await self.refresh()
+            }
         } catch {
-            lastError = "SSO login failed: \(error.localizedDescription). SSO URL copied to clipboard — paste in your preferred browser."
+            lastError = "SSO login failed: \(error.localizedDescription)"
         }
     }
 
@@ -476,9 +479,9 @@ final class AccountsViewModel {
     }
 
     /// Update menubar display settings
-    func updateMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool) async {
+    func updateMenuBarDisplay(aws: Bool, time: Bool, gcp: Bool, desk: Bool) async {
         do {
-            try await userConfigService.setMenuBarDisplay(aws: aws, time: time, gcp: gcp)
+            try await userConfigService.setMenuBarDisplay(aws: aws, time: time, gcp: gcp, desk: desk)
             userConfig = await userConfigService.getConfig()
         } catch {
             lastError = error.localizedDescription
