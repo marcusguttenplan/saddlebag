@@ -143,6 +143,26 @@ Open `Saddlebag.xcodeproj` in Xcode and build (⌘B) / run (⌘R).
 
 The app runs as a menu bar agent (`LSUIElement = YES`) — no Dock icon, just the menu bar.
 
+## Releases (distribution)
+
+**Saddlebag.app** — Archive in Xcode with **Direct Distribution**, notarize, export, then staple and zip (or DMG) the app. For each version, create a **GitHub Release** tagged `v1.2.3` and attach the notarized archive. Users unzip and drag `Saddlebag.app` to **Applications**.
+
+**`sb` CLI** — Pushing a tag matching `v*` runs [`release-sb.yml`](../.github/workflows/release-sb.yml), which uploads `sb-darwin-arm64.tar.gz`, `sb-darwin-amd64.tar.gz`, and `checksums-sha256.txt` to that release. Install:
+
+```bash
+# example: Apple Silicon — adjust tag and arch (amd64 for Intel)
+VER=v1.0.0
+BASE=https://github.com/OWNER/REPO/releases/download/$VER
+curl -sLO "$BASE/sb-darwin-arm64.tar.gz"
+curl -sLO "$BASE/checksums-sha256.txt"
+shasum -a 256 -c checksums-sha256.txt
+tar -xzf sb-darwin-arm64.tar.gz
+chmod +x sb-darwin-arm64
+sudo mv sb-darwin-arm64 /usr/local/bin/sb   # or put it on your PATH elsewhere
+```
+
+Replace `OWNER/REPO` with your GitHub path (align `_dev/sb/go.mod`’s module path with that repo when you publish). Initialize the repo on GitHub for automation to run.
+
 ## Screenshot Mode
 
 Toggle **Settings → General → Obfuscate sensitive data** to redact sensitive information across the entire UI.
