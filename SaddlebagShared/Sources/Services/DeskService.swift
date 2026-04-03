@@ -79,7 +79,7 @@ public actor DeskService {
         // Load SSH key into agent
         if let sshKey = desk.sshKey {
             let expandedPath = (sshKey as NSString).expandingTildeInPath
-            _ = try? await shell.run("ssh-add \(expandedPath)")
+            _ = try? await shell.run("ssh-add --apple-use-keychain \(expandedPath)")
         }
 
         // Build and write shared state

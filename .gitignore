@@ -53,3 +53,4 @@ playground.xcworkspace/
 
 # Go / manual sb release output (see README)
 dist/
+bin/

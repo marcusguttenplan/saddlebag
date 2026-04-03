@@ -45,10 +45,18 @@ public actor ShellService {
         process.environment = environment
 
         try process.run()
-        process.waitUntilExit()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutTask = Task.detached {
+            try? stdoutPipe.fileHandleForReading.readToEnd()
+        }
+        let stderrTask = Task.detached {
+            try? stderrPipe.fileHandleForReading.readToEnd()
+        }
+
+        let stdoutData = (await stdoutTask.value) ?? Data()
+        let stderrData = (await stderrTask.value) ?? Data()
+
+        process.waitUntilExit()
 
         let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
