@@ -27,12 +27,17 @@ struct MenuBarView: View {
     @Bindable var viewModel: AccountsViewModel
 
     // MARK: - Expand/collapse state
-    @State private var awsPlatformExpanded = true
-    @State private var gcpPlatformExpanded = true
+    @State private var awsPlatformExpanded = false
+    @State private var gcpPlatformExpanded = false
     @State private var expandedAWSPortals: Set<String> = []
     @State private var expandedGCPAccounts: Set<String> = []
     @State private var sortMode: SectionSortMode = .alphabetical
     @State private var hasInitializedExpansion = false
+
+    // Secrets state for context menu
+    @State private var projectSecrets: [String: [Secret]] = [:]  // projectId -> secrets
+    @State private var loadingSecrets: Set<String> = []
+    private let secretManagerService = SecretManagerService(shell: ShellService())
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,15 +111,16 @@ struct MenuBarView: View {
         .onChange(of: viewModel.gcpAccounts.count) {
             initializeExpansionIfNeeded()
         }
+        .onChange(of: viewModel.gcpProjectsByAccount) {
+            preloadSecrets()
+        }
     }
 
-    /// Expand all sections by default on first data load
+    /// Mark data as loaded (sections start collapsed)
     private func initializeExpansionIfNeeded() {
         guard !hasInitializedExpansion else { return }
         if !viewModel.groupedAWSProfiles.isEmpty || !viewModel.gcpAccounts.isEmpty {
             hasInitializedExpansion = true
-            expandedAWSPortals = Set(viewModel.groupedAWSProfiles.map(\.portal))
-            expandedGCPAccounts = Set(viewModel.gcpAccounts.map(\.account))
         }
     }
 
@@ -264,7 +270,16 @@ struct MenuBarView: View {
                     Button("Open Console") {
                         viewModel.openGCPConsole(for: activeConfig)
                     }
+
                     Divider()
+
+                    // Secrets submenu for active project
+                    if let projectId = activeConfig.project {
+                        secretsSubmenuByProjectId(projectId)
+                    }
+
+                    Divider()
+
                     if let account = activeConfig.account {
                         Button("gcloud auth login") {
                             Task { await viewModel.gcloudAuthLogin(account: account) }
@@ -655,6 +670,11 @@ struct MenuBarView: View {
 
             Divider()
 
+            // Secrets submenu
+            secretsSubmenu(project: project)
+
+            Divider()
+
             Button("gcloud auth login") {
                 Task { await viewModel.gcloudAuthLogin(account: account) }
             }
@@ -855,6 +875,97 @@ struct MenuBarView: View {
 
         Button("Activate") {
             Task { await viewModel.switchGCP(to: config) }
+        }
+    }
+
+    // MARK: - Secrets Submenu
+
+    @ViewBuilder
+    private func secretsSubmenu(project: GCPProject) -> some View {
+        secretsSubmenuByProjectId(project.projectId)
+    }
+
+    @ViewBuilder
+    private func secretsSubmenuByProjectId(_ projectId: String) -> some View {
+        Menu("Secrets") {
+            if loadingSecrets.contains(projectId) {
+                Text("Loading…")
+            } else if let secrets = projectSecrets[projectId] {
+                if secrets.isEmpty {
+                    Text("No secrets")
+                } else {
+                    ForEach(secrets.prefix(20), id: \.id) { secret in
+                        Button {
+                            Task { await copySecretValue(secret) }
+                        } label: {
+                            if let varName = secret.varName {
+                                Text("\(secret.name) → \(varName)")
+                            } else {
+                                Text(secret.name)
+                            }
+                        }
+                    }
+                    if secrets.count > 20 {
+                        Divider()
+                        Text("\(secrets.count - 20) more — open Saddlebag to see all")
+                            .font(.caption)
+                    }
+                }
+            } else {
+                Button("Load secrets") {
+                    Task { await loadSecretsForProject(projectId) }
+                }
+            }
+
+            Divider()
+            Button("Refresh") {
+                Task { await loadSecretsForProject(projectId) }
+            }
+        }
+    }
+
+    private func preloadSecrets() {
+        // Only load for accounts that don't need reauth
+        let authedAccounts = viewModel.gcpProjectsByAccount.keys
+            .filter { !viewModel.gcpAccountAuthNeeded.contains($0) }
+
+        let allProjectIds = authedAccounts
+            .compactMap { viewModel.gcpProjectsByAccount[$0] }
+            .flatMap { $0 }
+            .map(\.projectId)
+            .filter { projectSecrets[$0] == nil && !loadingSecrets.contains($0) }
+
+        guard !allProjectIds.isEmpty else { return }
+
+        Task {
+            for projectId in allProjectIds {
+                await loadSecretsForProject(projectId)
+            }
+        }
+    }
+
+    private func loadSecretsForProject(_ projectId: String) async {
+        loadingSecrets.insert(projectId)
+        do {
+            let secrets = try await secretManagerService.listSecrets(project: projectId)
+            projectSecrets[projectId] = secrets
+        } catch {
+            projectSecrets[projectId] = []
+        }
+        loadingSecrets.remove(projectId)
+    }
+
+    private func copySecretValue(_ secret: Secret) async {
+        do {
+            let value = try await secretManagerService.getSecretValue(
+                name: secret.name,
+                project: secret.project
+            )
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            viewModel.clipboardToast = "Copied \(secret.varName ?? secret.name)"
+        } catch {
+            viewModel.clipboardToast = "Failed to copy secret"
         }
     }
 }

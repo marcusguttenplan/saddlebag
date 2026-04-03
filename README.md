@@ -4,23 +4,25 @@ A native **macOS menu bar app** for managing multi-cloud credentials and develop
 
 Saddlebag manages "Desks" -- synchronized environment bundles that hot-swap AWS/GCP profiles, git identities, and shell variables across your entire system. It ensures your terminal and GUI always match your current project context while redacting sensitive IDs for safe screen sharing.
 
+It also integrates with **GCP Secret Manager**, letting you browse, copy, and generate `.env` files from cloud secrets using a label convention.
+
 ## What It Does
 
 Saddlebag lives in your menu bar and gives you a unified view of your cloud accounts:
 
 - **AWS** — reads your `~/.aws/config` profiles, tracks SSO sessions and token expiry
 - **GCP** — reads `gcloud` configurations, switch active configs, trigger auth flows
+- **Secrets** — browse GCP Secret Manager secrets, copy values, generate `.env` files using label convention
 - **Quick switching** — swap active profiles and configurations without touching the terminal
 - **Auth flows** — trigger `gcloud auth login` and `gcloud auth application-default login` directly from the UI
 - **Settings** — manage project tags, labels, and per-account preferences
 - **Screenshot Mode** — obfuscate account IDs, emails, SSO URLs, and project IDs for safe screen sharing
 
-### Roadmap (POC)
+### Roadmap
 
-- **`sb` CLI** — Go companion CLI for shell integration, replacing the fragile `.zshrc` bridge
-- **Desks** — first-class context bundles (AWS profile + GCP config + git identity + SSH key + env vars)
 - **Credential health** — background monitoring with macOS notifications (🟢 → 🟡 → 🔴)
 - **Git identity guard** — pre-commit hook that blocks commits with wrong `user.email`
+- **AWS Secrets Manager** — extend secrets integration to AWS
 
 ## Requirements
 
@@ -39,6 +41,7 @@ _dev/
 │       ├── Models/
 │       │   ├── AWSProfile.swift
 │       │   ├── GCPConfiguration.swift
+│       │   ├── Secret.swift
 │       │   ├── SSOSession.swift
 │       │   ├── SSOTokenCache.swift
 │       │   ├── SaddlebagError.swift
@@ -47,6 +50,7 @@ _dev/
 │           ├── AWSConfigService.swift
 │           ├── GCPConfigService.swift
 │           ├── Obfuscator.swift
+│           ├── SecretManagerService.swift
 │           ├── ShellService.swift
 │           ├── SSOSessionService.swift
 │           └── UserConfigService.swift
@@ -54,18 +58,30 @@ _dev/
 │   ├── SaddlebagApp.swift
 │   ├── Info.plist
 │   ├── ViewModels/
-│   │   └── AccountsViewModel.swift
+│   │   ├── AccountsViewModel.swift
+│   │   └── SecretsViewModel.swift
 │   └── Views/
+│       ├── MainAppView.swift
 │       ├── MenuBarView.swift
+│       ├── SecretsView.swift
 │       ├── SettingsView.swift
 │       ├── SettingsWindowManager.swift
 │       └── Components/
 │           ├── HorseshoeIcon.swift
 │           └── ProfileRowView.swift
-└── sb/                         # Go CLI (planned)
+└── sb/                         # Go CLI companion
     ├── go.mod
     ├── .go-version
-    └── cmd/
+    ├── cmd/
+    │   ├── env.go
+    │   ├── root.go
+    │   └── secrets.go
+    └── internal/
+        ├── config/
+        ├── desk/
+        ├── secrets/
+        │   └── secrets.go
+        └── state/
 ```
 
 ### Key design decisions
@@ -77,6 +93,43 @@ _dev/
   - `state.json` — live state (active desk, AWS profile, GCP config)
   - `desks/*.toml` — desk definitions (one per context)
 - **Go CLI** — `sb` companion binary, communicates with app via Unix socket at `/tmp/saddlebag.sock`
+- **Secrets label convention** — secrets use GCP labels (`org`, `service`, `stage`, `var`) to drive env file generation
+
+## Secrets Manager
+
+Saddlebag integrates with GCP Secret Manager. Secrets are organized using a **label convention**:
+
+| Label | Example | Purpose |
+|-------|---------|--------|
+| `org` | `courseclear` | Organization/client grouping |
+| `service` | `api`, `web` | Becomes the directory in env output |
+| `stage` | `dev`, `prod` | Becomes the file suffix `.env.$stage` |
+| `var` | `DATABASE_URL` | The env var name in the generated file |
+
+A secret labeled `service=api, stage=prod, var=DATABASE_URL` generates:
+
+```
+# api/.env.prod
+DATABASE_URL="<secret_value>"
+```
+
+### App Features
+
+- **Secrets tab** in the main window — browse, filter by labels, multi-select, generate `.env` files
+- **Menu bar context menu** — right-click any GCP project → Secrets → click to copy a value
+- **Clipboard options** — copy single value, copy as `.env` block (grouped by service/stage), copy as JSON
+
+### CLI (`sb secrets`)
+
+```bash
+sb secrets list [--project=X] [--org=cc] [--service=api] [--stage=prod]
+sb secrets get SECRET_NAME [--project=X]
+sb secrets create SECRET_NAME --value=... --org=cc --service=api --stage=prod --var=DB_URL
+sb secrets env [--project=X] [--service=api] [--stage=prod] [--output=./]
+sb secrets copy SECRET_NAME [--project=X]
+```
+
+`--project` is optional — inferred from active desk → GCP config → aliases in `config.json`. All commands accept `--provider=gcp` (default).
 
 ## Build & Run
 

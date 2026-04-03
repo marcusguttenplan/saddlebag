@@ -102,19 +102,31 @@ public actor GCPConfigService {
         if let account {
             command += " --account=\(account)"
         }
-        command += " 2>&1"
 
         do {
             let result = try await shell.run(command)
             guard !result.stdout.isEmpty else { return [] }
+
+            // Check if stdout contains an error message instead of JSON
+            let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.hasPrefix("[") {
+                if trimmed.contains("Reauthentication") || trimmed.contains("refreshing") {
+                    throw SaddlebagError.unauthenticated(service: "Google Cloud")
+                }
+                return []
+            }
+
             let data = Data(result.stdout.utf8)
             let decoded = try JSONDecoder().decode([GCPProjectJSON].self, from: data)
             return decoded.map { $0.toProject() }
         } catch SaddlebagError.shellExecutionFailed(_, _, let stderr) {
-            if stderr.contains("Reauthentication failed") || stderr.contains("There was a problem refreshing") {
+            if stderr.contains("Reauthentication") || stderr.contains("refreshing") {
                 throw SaddlebagError.unauthenticated(service: "Google Cloud")
             }
             throw SaddlebagError.commandFailed(reason: stderr)
+        } catch let error as SaddlebagError {
+            // Re-throw SaddlebagError (including unauthenticated thrown above)
+            throw error
         }
     }
 

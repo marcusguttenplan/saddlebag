@@ -7,6 +7,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case desks = "Desks"
     case aws = "AWS"
     case gcp = "GCP"
+    case secrets = "Secrets"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .desks: return "desktopcomputer"
         case .aws: return "server.rack"
         case .gcp: return "globe"
+        case .secrets: return "key.fill"
         case .settings: return "gear"
         }
     }
@@ -77,7 +79,7 @@ struct MainAppView: View {
     private var sidebar: some View {
         List(selection: $selectedSection) {
             Section {
-                ForEach([AppSection.desks, .aws, .gcp], id: \.self) { section in
+                ForEach([AppSection.desks, .aws, .gcp, .secrets], id: \.self) { section in
                     Label(section.rawValue, systemImage: section.icon)
                         .tag(section)
                 }
@@ -119,6 +121,8 @@ struct MainAppView: View {
             AWSContentView(viewModel: viewModel)
         case .gcp:
             GCPContentView(viewModel: viewModel)
+        case .secrets:
+            SecretsView(accountsViewModel: viewModel)
         case .settings:
             GeneralSettingsView(viewModel: viewModel)
         case .none:
