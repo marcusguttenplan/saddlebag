@@ -2,6 +2,8 @@
 
 A native **macOS menu bar app** for managing multi-cloud credentials and developer context — all from one place.
 
+Saddlebag manages "Desks" -- synchronized environment bundles that hot-swap AWS/GCP profiles, git identities, and shell variables across your entire system. It ensures your terminal and GUI always match your current project context while redacting sensitive IDs for safe screen sharing.
+
 ## What It Does
 
 Saddlebag lives in your menu bar and gives you a unified view of your cloud accounts:
