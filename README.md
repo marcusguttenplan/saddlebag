@@ -145,23 +145,74 @@ The app runs as a menu bar agent (`LSUIElement = YES`) — no Dock icon, just th
 
 ## Releases (distribution)
 
-**Saddlebag.app** — Archive in Xcode with **Direct Distribution**, notarize, export, then staple and zip (or DMG) the app. For each version, create a **GitHub Release** tagged `v1.2.3` and attach the notarized archive. Users unzip and drag `Saddlebag.app` to **Applications**.
+**Saddlebag.app** — Archive in Xcode with **Direct Distribution**, notarize, export, then staple and zip (or DMG) the app. For each version, create a **GitHub Release** tagged `v1.2.3` and attach the notarized archive (e.g. `Saddlebag.zip`).
 
-**`sb` CLI** — Pushing a tag matching `v*` runs [`release-sb.yml`](../.github/workflows/release-sb.yml), which uploads `sb-darwin-arm64.tar.gz`, `sb-darwin-amd64.tar.gz`, and `checksums-sha256.txt` to that release. Install:
+**`sb` CLI** — Build on a Mac, **Developer ID** sign, **notarize**, **staple**, zip, then upload **`sb-darwin-arm64.zip`**, **`sb-darwin-amd64.zip`**, and **`checksums-sha256.txt`** to the same GitHub Release (no CI required). See **Manual release: `sb`** below.
+
+### Manual release: `sb`
+
+From repo root (`_dev/`), run `mkdir -p dist`. Use **Developer ID Application** and **`notarytool`** (same flow as Saddlebag). Point `notarytool` at your **API key** (or Apple ID) as you already do for the app.
 
 ```bash
-# example: Apple Silicon — adjust tag and arch (amd64 for Intel)
-VER=v1.0.0
-BASE=https://github.com/OWNER/REPO/releases/download/$VER
-curl -sLO "$BASE/sb-darwin-arm64.tar.gz"
-curl -sLO "$BASE/checksums-sha256.txt"
-shasum -a 256 -c checksums-sha256.txt
-tar -xzf sb-darwin-arm64.tar.gz
-chmod +x sb-darwin-arm64
-sudo mv sb-darwin-arm64 /usr/local/bin/sb   # or put it on your PATH elsewhere
+TAG=v1.0.1
+mkdir -p dist
+cd sb
+for arch in arm64 amd64; do
+  bin="sb-darwin-${arch}"
+  GOOS=darwin GOARCH=$arch go build -trimpath \
+    -ldflags "-s -w -X github.com/marcusguttenplan/sb/cmd.version=${TAG}" \
+    -o "../dist/${bin}" .
+done
+cd ../dist
+IDENTITY='Developer ID Application: Your Name (TEAMID)'   # from Keychain / security find-identity
+
+for arch in arm64 amd64; do
+  bin="sb-darwin-${arch}"
+  zip="${bin}.zip"
+  codesign --force --timestamp --options runtime --sign "$IDENTITY" "$bin"
+  zip -q -y "$zip" "$bin"
+  xcrun notarytool submit "$zip" --wait --key /path/to/AuthKey_XXX.p8 --key-id XXX --issuer YOUR_ISSUER_UUID
+  xcrun stapler staple "$zip"
+done
+shasum -a 256 sb-darwin-*.zip > checksums-sha256.txt
 ```
 
-Replace `OWNER/REPO` with your GitHub path (align `_dev/sb/go.mod`’s module path with that repo when you publish). Initialize the repo on GitHub for automation to run.
+Upload with **GitHub Release UI** or:
+
+```bash
+gh release upload "$TAG" sb-darwin-arm64.zip sb-darwin-amd64.zip checksums-sha256.txt --clobber
+```
+
+Create the release/tag first if needed: `gh release create "$TAG" --title "$TAG" --notes ""`.
+
+### Install on another Mac (script)
+
+Use [`scripts/install-release.sh`](scripts/install-release.sh). **Private repo:** authenticate first (`gh auth login` or a token with **Contents: Read**).
+
+```bash
+# From a clone (recommended; repo root is this _dev folder)
+cd /path/to/saddlebag
+gh auth login
+./scripts/install-release.sh v1.0.0
+
+# Per-user CLI install (no sudo for sb binary)
+./scripts/install-release.sh v1.0.0 --user
+
+# Latest release (still needs auth for private repo)
+./scripts/install-release.sh
+```
+
+The script downloads **`sb`** for the machine’s arch (with checksum verification), installs **`Saddlebag.app`** into `/Applications`, and needs **`curl`**, **`python3`**, and **`unzip`**.
+
+**One-liner from GitHub raw** (token required for private repos — do not paste the token into shell history on shared machines):
+
+```bash
+export GITHUB_TOKEN=ghp_xxx   # classic PAT with repo scope, or fine-grained with Contents read
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/marcusguttenplan/saddlebag/v1.0.0/scripts/install-release.sh | bash -s -- v1.0.0
+```
+
+Manual install without the script: download `sb-darwin-ARCH.zip` and `checksums-sha256.txt` from [Releases](https://github.com/marcusguttenplan/saddlebag/releases), `grep` your zip filename in the checksum file and pipe that line to `shasum -a 256 -c`, unzip the archive, move the `sb-darwin-*` binary to your `PATH` as `sb`, and unzip `Saddlebag.zip` into `/Applications`.
 
 ## Screenshot Mode
 
