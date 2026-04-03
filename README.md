@@ -104,14 +104,16 @@ Saddlebag integrates with GCP Secret Manager. Secrets are organized using a **la
 | `org` | `courseclear` | Organization/client grouping |
 | `service` | `api`, `web` | Becomes the directory in env output |
 | `stage` | `dev`, `prod` | Becomes the file suffix `.env.$stage` |
-| `var` | `DATABASE_URL` | The env var name in the generated file |
 
-A secret labeled `service=api, stage=prod, var=DATABASE_URL` generates:
+The **secret name** is used as the env var name directly. A secret named `DATABASE_URL` with labels `service=api, stage=prod` generates:
 
 ```
 # api/.env.prod
 DATABASE_URL="<secret_value>"
 ```
+
+> [!NOTE]
+> GCP labels must be lowercase. Saddlebag automatically lowercases label values.
 
 ### App Features
 
@@ -124,12 +126,16 @@ DATABASE_URL="<secret_value>"
 ```bash
 sb secrets list [--project=X] [--org=cc] [--service=api] [--stage=prod]
 sb secrets get SECRET_NAME [--project=X]
-sb secrets create SECRET_NAME --value=... --org=cc --service=api --stage=prod --var=DB_URL
+sb secrets create SECRET_NAME --value=... --org=cc --service=api --stage=prod
+sb secrets tag SECRET_NAME --org=cc --service=api --stage=prod
 sb secrets env [--project=X] [--service=api] [--stage=prod] [--output=./]
 sb secrets copy SECRET_NAME [--project=X]
 ```
 
-`--project` is optional — inferred from active desk → GCP config → aliases in `config.json`. All commands accept `--provider=gcp` (default).
+- `--project` is optional — inferred from active desk → GCP config → aliases in `config.json`
+- `create` upserts — if the secret exists, it updates labels and adds a new version
+- `tag` updates labels on existing secrets (additive, preserves existing labels)
+- All commands accept `--provider=gcp` (default)
 
 ## Build & Run
 

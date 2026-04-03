@@ -23,12 +23,11 @@ var (
 	secretsStage    string
 	secretsOutput   string
 	secretsValue    string
-	secretsVar      string
 )
 
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
-	Short: "Manage cloud secrets (list, get, create, generate env files)",
+	Short: "Manage cloud secrets (list, get, create, tag, generate env files)",
 	Long: `Manage secrets from cloud secret managers.
 
 The --project flag is optional. If omitted, the project is inferred from:
@@ -40,7 +39,8 @@ Examples:
   sb secrets list
   sb secrets list --project=my-project --org=courseclear
   sb secrets get my-secret-name
-  sb secrets create my-secret --value="s3cr3t" --org=cc --service=api --stage=prod --var=API_KEY
+  sb secrets create my-secret --value="s3cr3t" --org=cc --service=api --stage=prod
+  sb secrets tag my-secret --org=cc --service=api --stage=prod
   sb secrets env --service=api --stage=prod --output=./
   sb secrets copy my-secret-name`,
 }
@@ -108,7 +108,11 @@ var secretsGetCmd = &cobra.Command{
 
 var secretsCreateCmd = &cobra.Command{
 	Use:   "create <secret-name>",
-	Short: "Create a new secret with labels",
+	Short: "Create a new secret with labels (upserts if exists)",
+	Long: `Create a new secret with labels and a value.
+
+If the secret already exists, it updates the labels and adds a new version
+with the provided value (upsert behavior).`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		project, err := resolveProject()
@@ -122,16 +126,13 @@ var secretsCreateCmd = &cobra.Command{
 
 		labels := make(map[string]string)
 		if secretsOrg != "" {
-			labels["org"] = secretsOrg
+			labels["org"] = strings.ToLower(secretsOrg)
 		}
 		if secretsService != "" {
-			labels["service"] = secretsService
+			labels["service"] = strings.ToLower(secretsService)
 		}
 		if secretsStage != "" {
-			labels["stage"] = secretsStage
-		}
-		if secretsVar != "" {
-			labels["var"] = secretsVar
+			labels["stage"] = strings.ToLower(secretsStage)
 		}
 
 		if err := secrets.CreateGCP(args[0], project, secretsValue, labels); err != nil {
@@ -229,6 +230,51 @@ var secretsCopyCmd = &cobra.Command{
 	},
 }
 
+var secretsTagCmd = &cobra.Command{
+	Use:   "tag <secret-name>",
+	Short: "Update labels on an existing secret",
+	Long: `Update labels on an existing secret. Only specified labels are updated;
+existing labels not mentioned are preserved.
+
+Examples:
+  sb secrets tag my-secret --org=courseclear --service=api --stage=prod
+  sb secrets tag my-secret --stage=staging`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		project, err := resolveProject()
+		if err != nil {
+			return err
+		}
+
+		labels := make(map[string]string)
+		if secretsOrg != "" {
+			labels["org"] = strings.ToLower(secretsOrg)
+		}
+		if secretsService != "" {
+			labels["service"] = strings.ToLower(secretsService)
+		}
+		if secretsStage != "" {
+			labels["stage"] = strings.ToLower(secretsStage)
+		}
+
+		if len(labels) == 0 {
+			return fmt.Errorf("at least one label flag is required (--org, --service, --stage)")
+		}
+
+		if err := secrets.UpdateLabelsGCP(args[0], project, labels); err != nil {
+			return fmt.Errorf("updating labels: %w", err)
+		}
+
+		fmt.Printf("Updated labels on %s in %s\n", args[0], project)
+		pairs := make([]string, 0, len(labels))
+		for k, v := range labels {
+			pairs = append(pairs, k+"="+v)
+		}
+		fmt.Printf("  labels: %s\n", strings.Join(pairs, ", "))
+		return nil
+	},
+}
+
 // resolveProject resolves the GCP project from flags, desk, or state
 func resolveProject() (string, error) {
 	// 1. Explicit flag
@@ -319,7 +365,6 @@ func init() {
 	secretsCreateCmd.Flags().StringVar(&secretsOrg, "org", "", "Org label")
 	secretsCreateCmd.Flags().StringVar(&secretsService, "service", "", "Service label")
 	secretsCreateCmd.Flags().StringVar(&secretsStage, "stage", "", "Stage label")
-	secretsCreateCmd.Flags().StringVar(&secretsVar, "var", "", "Var label (env var name)")
 
 	// Env flags
 	secretsEnvCmd.Flags().StringVar(&secretsOrg, "org", "", "Filter by org label")
@@ -327,10 +372,16 @@ func init() {
 	secretsEnvCmd.Flags().StringVar(&secretsStage, "stage", "", "Filter by stage label")
 	secretsEnvCmd.Flags().StringVar(&secretsOutput, "output", ".", "Output base path")
 
+	// Tag flags
+	secretsTagCmd.Flags().StringVar(&secretsOrg, "org", "", "Org label")
+	secretsTagCmd.Flags().StringVar(&secretsService, "service", "", "Service label")
+	secretsTagCmd.Flags().StringVar(&secretsStage, "stage", "", "Stage label")
+
 	// Wire up
 	secretsCmd.AddCommand(secretsListCmd)
 	secretsCmd.AddCommand(secretsGetCmd)
 	secretsCmd.AddCommand(secretsCreateCmd)
+	secretsCmd.AddCommand(secretsTagCmd)
 	secretsCmd.AddCommand(secretsEnvCmd)
 	secretsCmd.AddCommand(secretsCopyCmd)
 	rootCmd.AddCommand(secretsCmd)

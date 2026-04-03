@@ -94,7 +94,8 @@ func GetValueGCP(name, project string) (string, error) {
 	return string(out), nil
 }
 
-// CreateGCP creates a new secret with labels and an initial value
+// CreateGCP creates a new secret with labels and an initial value.
+// If the secret already exists, it updates labels and adds a new version (upsert).
 func CreateGCP(name, project, value string, labels map[string]string) error {
 	// Build create command
 	args := []string{"secrets", "create", name, "--project=" + project}
@@ -109,10 +110,50 @@ func CreateGCP(name, project, value string, labels map[string]string) error {
 
 	createCmd := exec.Command("gcloud", args...)
 	if out, err := createCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("creating secret: %s: %w", string(out), err)
+		outStr := string(out)
+		if strings.Contains(outStr, "already exists") {
+			// Secret exists — update labels and add new version
+			fmt.Fprintf(os.Stderr, "Secret %s already exists, updating...\n", name)
+			if len(labels) > 0 {
+				if err := UpdateLabelsGCP(name, project, labels); err != nil {
+					return fmt.Errorf("updating labels: %w", err)
+				}
+			}
+			if value != "" {
+				return addVersionGCP(name, project, value)
+			}
+			return nil
+		}
+		return fmt.Errorf("creating secret: %s: %w", outStr, err)
 	}
 
 	// Add initial version
+	return addVersionGCP(name, project, value)
+}
+
+// UpdateLabelsGCP updates labels on an existing secret
+func UpdateLabelsGCP(name, project string, labels map[string]string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+
+	pairs := make([]string, 0, len(labels))
+	for k, v := range labels {
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+
+	cmd := exec.Command("gcloud", "secrets", "update", name,
+		"--project="+project,
+		"--update-labels="+strings.Join(pairs, ","),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("updating labels: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+func addVersionGCP(name, project, value string) error {
 	addCmd := exec.Command("gcloud", "secrets", "versions", "add", name,
 		"--project="+project,
 		"--data-file=-",
@@ -121,7 +162,6 @@ func CreateGCP(name, project, value string, labels map[string]string) error {
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("adding secret version: %s: %w", string(out), err)
 	}
-
 	return nil
 }
 
@@ -163,8 +203,7 @@ func GenerateEnvFiles(secrets []Secret, basePath string, fetcher func(string, st
 	for _, s := range secrets {
 		svc := s.Service()
 		stg := s.Stage()
-		varName := s.Var()
-		if svc == "" || stg == "" || varName == "" {
+		if svc == "" || stg == "" {
 			continue
 		}
 
@@ -178,7 +217,7 @@ func GenerateEnvFiles(secrets []Secret, basePath string, fetcher func(string, st
 			return nil, fmt.Errorf("fetching %s: %w", s.Name, err)
 		}
 
-		groups[key].Vars = append(groups[key].Vars, envVar{Name: varName, Value: value})
+		groups[key].Vars = append(groups[key].Vars, envVar{Name: s.Name, Value: value})
 	}
 
 	// Write files
@@ -219,8 +258,7 @@ func FormatAsEnvFiles(secrets []Secret, fetcher func(string, string) (string, er
 	for _, s := range secrets {
 		svc := s.Service()
 		stg := s.Stage()
-		varName := s.Var()
-		if svc == "" || stg == "" || varName == "" {
+		if svc == "" || stg == "" {
 			continue
 		}
 
@@ -234,7 +272,7 @@ func FormatAsEnvFiles(secrets []Secret, fetcher func(string, string) (string, er
 			return "", fmt.Errorf("fetching %s: %w", s.Name, err)
 		}
 
-		groups[key].Vars = append(groups[key].Vars, envVar{Name: varName, Value: value})
+		groups[key].Vars = append(groups[key].Vars, envVar{Name: s.Name, Value: value})
 	}
 
 	var sections []string

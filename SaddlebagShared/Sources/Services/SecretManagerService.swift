@@ -141,11 +141,10 @@ public actor SecretManagerService {
         for secret in secrets {
             guard let service = secret.service,
                   let stage = secret.stage,
-                  let varName = secret.varName,
                   let value = values[secret.name] else {
                 continue
             }
-            grouped[service, default: [:]][stage, default: []].append((varName: varName, value: value))
+            grouped[service, default: [:]][stage, default: []].append((varName: secret.name, value: value))
         }
 
         var writtenFiles: [String] = []
@@ -196,11 +195,10 @@ public actor SecretManagerService {
         for secret in secrets {
             guard let service = secret.service,
                   let stage = secret.stage,
-                  let varName = secret.varName,
                   let value = values[secret.name] else {
                 continue
             }
-            grouped[service, default: [:]][stage, default: []].append((varName: varName, value: value))
+            grouped[service, default: [:]][stage, default: []].append((varName: secret.name, value: value))
         }
 
         var sections: [String] = []
