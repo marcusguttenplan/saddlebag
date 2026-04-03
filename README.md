@@ -164,7 +164,7 @@ for arch in arm64 amd64; do
     -o "../dist/${bin}" .
 done
 cd ../dist
-IDENTITY='Developer ID Application: Your Name (TEAMID)'   # from Keychain / security find-identity
+IDENTITY='Developer ID Application: Marcus Guttenplan (WLBDHVYSL6)'   # from Keychain / security find-identity
 
 for arch in arm64 amd64; do
   bin="sb-darwin-${arch}"
