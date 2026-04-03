@@ -128,12 +128,36 @@ machine_arch() {
 
 download() {
   local url=$1 dest=$2
+  local asset_name="$(basename "$url")"
+  
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run] curl -> $dest"
+    echo "[dry-run] download $asset_name -> $dest"
     return
   fi
+
+  # 1. Try gh CLI if available and authenticated
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if gh release download "$TAG" -p "$asset_name" --repo "$REPO" --clobber -O "$dest" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # 2. Try GitHub API to avoid 404 on private repositories
+  if [[ -n "${TOKEN:-}" ]]; then
+    local release_url="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
+    # Extract asset ID
+    local asset_id=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" "$release_url" | python3 -c "import json,sys; data=json.load(sys.stdin); print(next((a['id'] for a in data.get('assets',[]) if a['name'] == '${asset_name}'), ''))" 2>/dev/null || true)
+    
+    if [[ -n "$asset_id" ]]; then
+      local api_url="https://api.github.com/repos/${REPO}/releases/assets/${asset_id}"
+      curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/octet-stream" -o "$dest" "$api_url"
+      return $?
+    fi
+  fi
+
+  # 3. Fallback to direct url (often fails on private repos)
   curl -fsSL \
-    -H "Authorization: Bearer ${TOKEN}" \
+    ${TOKEN:+-H "Authorization: Bearer ${TOKEN}"} \
     -H "Accept: application/octet-stream" \
     -o "$dest" \
     "$url"
