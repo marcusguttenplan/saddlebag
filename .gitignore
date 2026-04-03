@@ -50,3 +50,6 @@ playground.xcworkspace/
 # === Misc ===
 *.log
 *.tmp
+
+# Go / manual sb release output (see README)
+dist/
