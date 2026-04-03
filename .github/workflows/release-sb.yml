@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: _dev/sb/go.mod
+          go-version-file: sb/go.mod
 
       - name: Build and package
         env:
@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cd _dev/sb
+          cd sb
           for arch in arm64 amd64; do
             out="sb-darwin-${arch}"
             GOOS=darwin GOARCH="$arch" go build -trimpath \
