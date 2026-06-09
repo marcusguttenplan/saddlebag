@@ -2,7 +2,7 @@
 
 A native **macOS menu bar app** for managing multi-cloud credentials and developer context — all from one place.
 
-Saddlebag manages "Desks" -- synchronized environment bundles that hot-swap AWS/GCP profiles, git identities, and shell variables across your entire system. It ensures your terminal and GUI always match your current project context while redacting sensitive IDs for safe screen sharing.
+Saddlebag manages "Desks" — synchronized environment bundles that hot-swap AWS/GCP profiles, git identities, shell variables, and **model routing** across your entire system. It ensures your terminal and GUI always match your current project context while redacting sensitive IDs for safe screen sharing.
 
 It also integrates with **GCP Secret Manager**, letting you browse, copy, and generate `.env` files from cloud secrets using a label convention.
 
@@ -17,6 +17,7 @@ Saddlebag lives in your menu bar and gives you a unified view of your cloud acco
 - **Auth flows** — trigger `gcloud auth login` and `gcloud auth application-default login` directly from the UI
 - **Settings** — manage project tags, labels, and per-account preferences
 - **Screenshot Mode** — obfuscate account IDs, emails, SSO URLs, and project IDs for safe screen sharing
+- **Model Gateway** — localhost OpenAI-compatible proxy that routes AI requests to the right provider per desk
 
 ### Roadmap
 
@@ -33,7 +34,7 @@ Saddlebag lives in your menu bar and gives you a unified view of your cloud acco
 ## Architecture
 
 ```
-_dev/
+saddlebag/
 ├── Saddlebag.xcodeproj         # Xcode project
 ├── SaddlebagShared/            # Shared Swift package (models + services)
 │   ├── Package.swift
@@ -74,14 +75,18 @@ _dev/
     ├── .go-version
     ├── cmd/
     │   ├── env.go
+    │   ├── gateway.go          # sb gateway start/status
+    │   ├── init.go
     │   ├── root.go
     │   └── secrets.go
+    ├── examples/               # Example desk TOML files
     └── internal/
-        ├── config/
-        ├── desk/
+        ├── config/             # ~/.saddlebag/ path helpers
+        ├── desk/               # Desk config + LLM routing hierarchy
+        ├── gateway/            # Model gateway (HTTP server + 4 provider adapters)
+        ├── ledger/             # Token ledger (JSONL) + pricing table
         ├── secrets/
-        │   └── secrets.go
-        └── state/
+        └── trace/              # W3C traceparent
 ```
 
 ### Key design decisions
@@ -92,8 +97,146 @@ _dev/
   - `config.json` — user preferences (labels, tags, favorites)
   - `state.json` — live state (active desk, AWS profile, GCP config)
   - `desks/*.toml` — desk definitions (one per context)
+  - `ledger/YYYY-MM-DD.jsonl` — append-only token ledger (one file per day)
 - **Go CLI** — `sb` companion binary, communicates with app via Unix socket at `/tmp/saddlebag.sock`
 - **Secrets label convention** — secrets use GCP labels (`org`, `service`, `stage`, `var`) to drive env file generation
+
+---
+
+## Model Gateway
+
+The `sb` CLI includes a **localhost OpenAI-compatible model gateway** — a thin HTTP proxy that routes AI requests to the right provider based on the active desk's `[llm]` configuration.
+
+### Why
+
+- One endpoint (`http://localhost:7474/v1/chat/completions`) for all providers
+- Per-desk routing: use Opus for planning, Sonnet for implementation, gemma4 (local/free) for classification
+- Daily budget enforcement with hard-stop at limit
+- Append-only token ledger for cost tracking
+- W3C `traceparent` propagation through all calls
+- Ollama subprocess management — `sb` starts and stops `ollama serve` automatically
+
+### Supported Providers
+
+| Provider | Models | Notes |
+|---|---|---|
+| `anthropic` | claude-opus-4, claude-sonnet-4, claude-haiku-3-5 | Prompt cache read/write tracked |
+| `openai` | gpt-4o, gpt-4o-mini, o3, o4-mini | Passthrough; usage captured from final SSE chunk |
+| `google` | gemini-2.5-pro, gemini-2.5-flash | systemInstruction extraction, function calling |
+| `ollama` | any local model | Zero cost; NDJSON→SSE translation |
+
+### Routing Hierarchy
+
+For each request, the gateway resolves the model using this priority order:
+
+1. **Request-level** — `X-Model: provider/model` header or `x_model` body field
+2. **Task-level** — `X-Task-Type: plan|implement|classify|review|verify` mapped via `[llm.routing]`
+3. **Path-level** — `.packmule.toml` file walked up from `X-Path-Dir` header
+4. **Desk default** — `[llm] default_provider` + `default_model`
+5. **Global default** — `anthropic/claude-sonnet-4-20250514`
+
+### Desk Configuration
+
+Add `[llm]` and `[harness]` sections to any desk TOML:
+
+```toml
+[desk]
+name = "My Project"
+
+[llm]
+default_provider = "anthropic"
+default_model    = "claude-sonnet-4-20250514"
+
+[llm.routing]
+plan      = "anthropic/claude-opus-4-20250514"
+implement = "anthropic/claude-sonnet-4-20250514"
+classify  = "ollama/gemma4:latest"          # local — zero cost
+review    = "anthropic/claude-opus-4-20250514"
+verify    = "anthropic/claude-sonnet-4-20250514"
+
+[llm.budget]
+daily_limit_usd = 50.00   # hard stop — gateway returns 429 when exceeded
+warn_at_usd     = 40.00   # adds X-Budget-Warning header
+
+[llm.fallback]
+primary  = "anthropic"
+fallback = ["openai", "ollama/gemma4:latest"]
+
+[llm.providers.ollama]
+base_url = "http://localhost:11434"
+models   = ["gemma4:latest", "gemma3:2b"]
+
+[harness]
+max_context_tokens     = 180000
+progressive_disclosure = true
+gateway_url            = "http://localhost:7474"
+```
+
+See [`sb/examples/`](sb/examples/) for complete examples.
+
+### Path-Level Overrides
+
+Drop a `.packmule.toml` in any subdirectory to override routing for that subtree:
+
+```toml
+# packages/hot-path/.packmule.toml
+[llm.routing]
+implement = "openai/gpt-4o"   # use GPT-4o for this performance-critical package
+```
+
+### CLI
+
+```bash
+# Start the gateway (reads active desk from $SB_DESK or .desk file)
+sb gateway start
+
+# Start and manage ollama serve as a subprocess
+sb gateway start --with-ollama
+
+# Use a specific desk
+sb gateway start --desk myproject --port 8080
+
+# Show today's token usage + cost
+sb gateway status
+```
+
+**API keys** are read from environment variables:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+export GOOGLE_API_KEY=AIza...
+# Ollama requires no key (local)
+```
+
+### Using the Gateway
+
+Any OpenAI-compatible client works:
+
+```bash
+# Route by task type
+curl http://localhost:7474/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Task-Type: classify" \
+  -d '{"messages":[{"role":"user","content":"Is this a bug or a feature request?"}]}'
+
+# Explicit provider override
+curl http://localhost:7474/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Model: ollama/gemma4:latest" \
+  -d '{"model":"ollama/gemma4:latest","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+### Token Ledger
+
+Every call is appended to `~/.saddlebag/ledger/YYYY-MM-DD.jsonl`:
+
+```jsonc
+{"ts":"2026-06-09T16:49:00Z","trace_id":"abc123","provider":"anthropic","model":"claude-sonnet-4-20250514","task_type":"implement","input_tokens":1234,"output_tokens":456,"cost_usd":0.0106,"duration_ms":842,"routing_source":"task","status_code":200}
+```
+
+View with `sb gateway status` or stream with `tail -f ~/.saddlebag/ledger/$(date +%Y-%m-%d).jsonl | jq .`.
+
+---
 
 ## Secrets Manager
 
@@ -143,6 +286,13 @@ Open `Saddlebag.xcodeproj` in Xcode and build (⌘B) / run (⌘R).
 
 The app runs as a menu bar agent (`LSUIElement = YES`) — no Dock icon, just the menu bar.
 
+To build the `sb` CLI:
+
+```bash
+cd sb
+go build -o sb ./main.go
+```
+
 ## Releases (distribution)
 
 **Saddlebag.app** — Archive in Xcode with **Direct Distribution**, notarize, export, then staple and zip (or DMG) the app. For each version, create a **GitHub Release** tagged `v1.2.3` and attach the notarized archive (e.g. `Saddlebag.zip`).
@@ -151,7 +301,7 @@ The app runs as a menu bar agent (`LSUIElement = YES`) — no Dock icon, just th
 
 ### Manual release: `sb`
 
-From repo root (`_dev/`), run `mkdir -p dist`. Use **Developer ID Application** and **`notarytool`** (same flow as Saddlebag). Point `notarytool` at your **API key** (or Apple ID) as you already do for the app.
+From repo root (`saddlebag/`), run `mkdir -p dist`. Use **Developer ID Application** and **`notarytool`** (same flow as Saddlebag). Point `notarytool` at your **API key** (or Apple ID) as you already do for the app.
 
 ```bash
 TAG=v1.0.1
@@ -190,7 +340,7 @@ Create the release/tag first if needed: `gh release create "$TAG" --title "$TAG"
 Use [`scripts/install-release.sh`](scripts/install-release.sh). **Private repo:** authenticate first (`gh auth login` or a token with **Contents: Read**).
 
 ```bash
-# From a clone (recommended; repo root is this _dev folder)
+# From a clone (recommended; repo root is this saddlebag folder)
 cd /path/to/saddlebag
 gh auth login
 ./scripts/install-release.sh v1.0.0
@@ -202,7 +352,7 @@ gh auth login
 ./scripts/install-release.sh
 ```
 
-The script downloads **`sb`** for the machine’s arch (with checksum verification), installs **`Saddlebag.app`** into `/Applications`, and needs **`curl`**, **`python3`**, and **`unzip`**.
+The script downloads **`sb`** for the machine's arch (with checksum verification), installs **`Saddlebag.app`** into `/Applications`, and needs **`curl`**, **`python3`**, and **`unzip`**.
 
 **One-liner from GitHub raw** (token required for private repos — do not paste the token into shell history on shared machines):
 
