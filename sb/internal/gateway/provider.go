@@ -8,7 +8,7 @@ import (
 // Provider is the interface every upstream model provider must implement.
 // All providers normalize to/from the OpenAI-compatible types in types.go.
 //
-// Implementations: anthropicProvider, openAIProvider, googleProvider, ollamaProvider.
+// Implementations: anthropicProvider, openAIProvider, googleProvider, ollamaProvider, claudeCodeProvider.
 type Provider interface {
 	// Name returns the provider identifier: "anthropic", "openai", "google", "ollama".
 	Name() string
