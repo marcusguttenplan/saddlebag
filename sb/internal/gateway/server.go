@@ -301,8 +301,12 @@ func (s *Server) handleNonStream(ctx context.Context, w http.ResponseWriter, p P
 	if err != nil {
 		var pErr *ProviderError
 		if errors.As(err, &pErr) {
-			s.writeError(w, pErr.StatusCode, "provider_error", pErr.Message)
-			return nil, pErr.StatusCode, err
+			code := pErr.StatusCode
+			if code <= 0 {
+				code = http.StatusBadGateway // network failure talking to provider
+			}
+			s.writeError(w, code, "provider_error", pErr.Message)
+			return nil, code, err
 		}
 		s.writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return nil, http.StatusInternalServerError, err
@@ -393,6 +397,11 @@ func (s *Server) buildProvider(provider string) (Provider, error) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, statusCode int, errType, msg string) {
+	// Guard: WriteHeader panics on invalid (0 or negative) codes.
+	// 0 means a network-level failure (never got an HTTP response from provider).
+	if statusCode <= 0 || statusCode > 999 {
+		statusCode = http.StatusInternalServerError
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(ErrorResponse{

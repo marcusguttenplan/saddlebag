@@ -36,7 +36,9 @@ func (m *OllamaManager) EnsureRunning(ctx context.Context) error {
 		return fmt.Errorf("ollama not found in PATH: %w", err)
 	}
 
-	m.cmd = exec.CommandContext(ctx, ollamaBin, "serve")
+	// Use exec.Command (NOT exec.CommandContext) so the subprocess is NOT
+	// tied to the startup-timeout context. Its lifetime is managed by Stop().
+	m.cmd = exec.Command(ollamaBin, "serve")
 	// Don't inherit stdout/stderr by default — redirect to /dev/null unless debug
 	if err := m.cmd.Start(); err != nil {
 		return fmt.Errorf("starting ollama serve: %w", err)
