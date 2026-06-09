@@ -6,10 +6,46 @@ profile = "default"
 
 [git]
 email = "marcus@impracticalapplications.com"
-name = "Marcus Guttenplan"
+name  = "Marcus Guttenplan"
 
 [ssh]
 key = "~/.ssh/id_impractical"
 
 [env]
 ORGANIZATION = "impracticalapplications"
+
+# ---------------------------------------------------------------------------
+# Model gateway configuration
+# ---------------------------------------------------------------------------
+
+[llm]
+default_provider = "anthropic"
+default_model    = "claude-sonnet-4-20250514"
+
+[llm.routing]
+plan      = "anthropic/claude-opus-4-20250514"
+implement = "anthropic/claude-sonnet-4-20250514"
+classify  = "ollama/gemma4:latest"          # local — zero cost
+review    = "anthropic/claude-opus-4-20250514"
+verify    = "anthropic/claude-sonnet-4-20250514"
+
+[llm.budget]
+daily_limit_usd = 50.00
+warn_at_usd     = 40.00
+
+[llm.fallback]
+primary  = "anthropic"
+fallback = ["openai", "ollama/gemma4:latest"]
+
+[llm.providers.ollama]
+base_url = "http://localhost:11434"
+models   = ["gemma4:latest", "gemma3:2b"]
+
+# ---------------------------------------------------------------------------
+# Context assembly
+# ---------------------------------------------------------------------------
+
+[harness]
+max_context_tokens     = 180000
+progressive_disclosure = true
+gateway_url            = "http://localhost:7474"

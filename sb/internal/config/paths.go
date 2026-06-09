@@ -29,6 +29,11 @@ func DesksDir() string {
 	return filepath.Join(SaddlebagDir(), "desks")
 }
 
+// LedgerDir returns the path to ~/.saddlebag/ledger/
+func LedgerDir() string {
+	return filepath.Join(SaddlebagDir(), "ledger")
+}
+
 // SocketPath returns the Unix socket path for IPC with Saddlebag.app
 func SocketPath() string {
 	return "/tmp/saddlebag.sock"
