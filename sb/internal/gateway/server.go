@@ -391,6 +391,12 @@ func (s *Server) buildProvider(provider string) (Provider, error) {
 	case "ollama":
 		baseURL := desk.OllamaBaseURL(s.desk)
 		return newOllamaProvider(baseURL), nil
+	case "claude-code":
+		// No API key — uses Claude Code subscription auth from ~/.claude/
+		return newClaudeCodeProvider()
+	case "gemini-cli":
+		// No API key — uses Gemini subscription credentials from ~/.gemini/
+		return newGeminiCLIProvider("")
 	default:
 		return nil, fmt.Errorf("unknown provider: %q", provider)
 	}
