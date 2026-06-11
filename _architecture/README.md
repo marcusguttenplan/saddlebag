@@ -5,7 +5,7 @@
 >
 > **Two roles:**
 > 1. **Operations hub** — `sb` installs, configures, and manages the lifecycle of every Packmule component (packmule, byobrain, campfire). It is the portable developer toolbelt.
-> 2. **Policy proxy** — at runtime, all LLM requests from BYOBrain flow through saddlebag's gateway (:7474), which enforces identity, budget, and Cedar policies before forwarding to packmule (:7475).
+> 2. **Policy proxy** — at runtime, all LLM requests from BYOBrain flow through saddlebag's gateway (:7474), which enforces identity, budget, and Cedar policies before forwarding to packmule (:7475). Saddlebag also drives Campfire via its CloudEvents event bus.
 
 ---
 
@@ -297,4 +297,4 @@ That is packmule's job.
 
 ---
 
-*Last updated: June 2026. Reflects the agreed architecture: packmule owns the LLM gateway, saddlebag owns policy and developer operations.*
+*Last updated: June 2026. Reflects the agreed architecture: IDE + Campfire are user-facing surfaces. BYOB is the hub (calls saddlebag for authn/authz). Saddlebag owns policy and developer operations. Packmule is the agentic harness (owns the LLM loop, calls back to BYOB sidecar for tool execution). Campfire reads Saddlebag's CloudEvents bus.*
