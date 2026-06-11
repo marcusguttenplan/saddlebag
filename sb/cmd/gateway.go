@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -26,7 +27,7 @@ var gatewayCmd = &cobra.Command{
 
 var gatewayStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the saddlebag policy proxy on localhost",
+	Short: "Start the saddlebag policy proxy (and optionally pm) on localhost",
 	Long: `Start the saddlebag policy proxy — a localhost HTTP server that sits in
 front of the Packmule gateway (pm serve) and enforces policy.
 
@@ -36,18 +37,16 @@ The proxy:
   - Reverse-proxies authorized requests to pm (default: http://localhost:7475)
   - Writes an audit trail row to ~/.saddlebag/ledger/
 
-Start pm serve first, then start sb gateway:
-  pm serve &
-  sb gateway start
-
-Or point at an existing pm instance:
-  sb gateway start --packmule-url http://localhost:7475
+Use --with-pm to start both pm and the sb proxy together in a single command.
+Both processes shut down cleanly when you press Ctrl-C.
 
 Examples:
-  sb gateway start                              # default :7474 → pm :7475
-  sb gateway start --port 8080                  # custom sb port
-  sb gateway start --desk myproject             # use specific desk
-  sb gateway start --packmule-url http://...    # non-default pm URL
+  sb gateway start                              # proxy only (pm must already run)
+  sb gateway start --with-pm                   # start pm + sb proxy together
+  sb gateway start --with-pm --with-ollama     # full local stack (pm + Ollama + sb)
+  sb gateway start --with-pm --desk myproject  # with a specific desk
+  sb gateway start --port 8080                 # custom sb proxy port
+  sb gateway start --packmule-url http://...   # non-default pm URL
 `,
 	RunE: runGatewayStart,
 }
@@ -59,15 +58,21 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 var (
-	gatewayPort       string
-	gatewayDesk       string
+	gatewayPort        string
+	gatewayDesk        string
 	gatewayPackmuleURL string
+	gatewayWithPM      bool
+	gatewayPMPort      string
+	gatewayWithOllama  bool
 )
 
 func init() {
-	gatewayStartCmd.Flags().StringVar(&gatewayPort, "port", "7474", "Port to listen on (localhost only)")
+	gatewayStartCmd.Flags().StringVar(&gatewayPort, "port", "7474", "Port for the sb policy proxy (localhost only)")
 	gatewayStartCmd.Flags().StringVar(&gatewayDesk, "desk", "", "Desk to use (default: resolved from environment)")
 	gatewayStartCmd.Flags().StringVar(&gatewayPackmuleURL, "packmule-url", "http://localhost:7475", "Packmule pm serve URL")
+	gatewayStartCmd.Flags().BoolVar(&gatewayWithPM, "with-pm", false, "Start pm serve alongside sb gateway (managed subprocess)")
+	gatewayStartCmd.Flags().StringVar(&gatewayPMPort, "pm-port", "7475", "Port for pm serve when --with-pm is set")
+	gatewayStartCmd.Flags().BoolVar(&gatewayWithOllama, "with-ollama", false, "Pass --with-ollama to pm serve (requires --with-pm)")
 
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
@@ -98,9 +103,37 @@ func runGatewayStart(cmd *cobra.Command, args []string) error {
 			logger.Printf("desk %q not found, starting with no desk config", activeDeskName)
 		}
 	}
-
 	if activeDeskConfig == nil {
 		activeDeskConfig = &desk.Desk{}
+	}
+
+	// --- Optionally start pm serve as a managed subprocess ---
+	var pmProc *os.Process
+	pmURL := gatewayPackmuleURL
+
+	if gatewayWithPM {
+		var err error
+		pmURL, pmProc, err = startPMSubprocess(logger, gatewayPMPort, activeDeskName, gatewayWithOllama)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if pmProc != nil {
+				logger.Println("stopping pm serve...")
+				_ = pmProc.Signal(syscall.SIGTERM)
+				// Give pm 5s to exit cleanly, then force-kill.
+				done := make(chan struct{})
+				go func() {
+					pmProc.Wait() //nolint:errcheck
+					close(done)
+				}()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					_ = pmProc.Kill()
+				}
+			}
+		}()
 	}
 
 	// --- Audit ledger ---
@@ -114,7 +147,7 @@ func runGatewayStart(cmd *cobra.Command, args []string) error {
 		Desk:        activeDeskConfig,
 		Ledger:      l,
 		Logger:      logger,
-		PackmuleURL: gatewayPackmuleURL,
+		PackmuleURL: pmURL,
 	})
 	if err != nil {
 		return fmt.Errorf("creating gateway: %w", err)
@@ -134,21 +167,86 @@ func runGatewayStart(cmd *cobra.Command, args []string) error {
 	}()
 
 	time.Sleep(50 * time.Millisecond)
-	fmt.Fprintf(os.Stderr, "\n  Saddlebag policy proxy ready\n")
-	fmt.Fprintf(os.Stderr, "  Endpoint : http://%s/v1/chat/completions\n", addr)
-	fmt.Fprintf(os.Stderr, "  Upstream : %s\n", gatewayPackmuleURL)
-	fmt.Fprintf(os.Stderr, "  Health   : http://%s/health\n", addr)
-	if activeDeskConfig.DeskMeta.Name != "" {
-		fmt.Fprintf(os.Stderr, "  Desk     : %s\n", activeDeskConfig.DeskMeta.Name)
-	}
-	fmt.Fprintf(os.Stderr, "  Ledger   : %s\n", config.LedgerDir())
-	fmt.Fprintln(os.Stderr)
+	printBanner(addr, pmURL, activeDeskConfig, gatewayWithPM, gatewayWithOllama)
 
 	<-stop
-	logger.Println("shutting down...")
+	logger.Println("shutting down sb proxy...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
+}
+
+// startPMSubprocess launches `pm serve` as a child process, waits for it to
+// become healthy, and returns its URL and process handle.
+// withOllama passes --with-ollama through to pm so pm manages the Ollama lifecycle.
+func startPMSubprocess(logger *log.Logger, port, deskName string, withOllama bool) (pmURL string, proc *os.Process, err error) {
+	pmBin, err := exec.LookPath("pm")
+	if err != nil {
+		return "", nil, fmt.Errorf("pm not found in PATH — install pm first (cd packmule/cli && make install): %w", err)
+	}
+
+	pmURL = "http://127.0.0.1:" + port
+
+	// If pm is already running on that port, reuse it.
+	if pmHealthCheck(pmURL) {
+		logger.Printf("pm already running at %s — skipping launch", pmURL)
+		return pmURL, nil, nil
+	}
+
+	args := []string{"serve", "--port", port}
+	if deskName != "" {
+		args = append(args, "--desk", deskName)
+	} else if v := os.Getenv("SB_DESK"); v != "" {
+		args = append(args, "--desk", v)
+	}
+	if withOllama {
+		args = append(args, "--with-ollama")
+	}
+
+	pmCmd := exec.Command(pmBin, args...)
+	pmCmd.Stdout = os.Stderr // pm logs → same stderr stream as sb
+	pmCmd.Stderr = os.Stderr
+
+	if err := pmCmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("starting pm serve: %w", err)
+	}
+
+	proc = pmCmd.Process
+	logger.Printf("started pm serve (pid %d) at %s", proc.Pid, pmURL)
+
+	// Wait up to 10s for pm to become healthy
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if pmHealthCheck(pmURL) {
+			return pmURL, proc, nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Timed out — kill and bail
+	_ = proc.Kill()
+	return "", nil, fmt.Errorf("pm serve did not become healthy within 10s — check pm logs")
+}
+
+func printBanner(addr, pmURL string, d *desk.Desk, withPM, withOllama bool) {
+	fmt.Fprintln(os.Stderr)
+	if withPM {
+		fmt.Fprintf(os.Stderr, "  ✦ Packmule stack ready")
+		if withOllama {
+			fmt.Fprintf(os.Stderr, " (+ Ollama)")
+		}
+		fmt.Fprintln(os.Stderr)
+	} else {
+		fmt.Fprintf(os.Stderr, "  Saddlebag policy proxy ready\n")
+	}
+	fmt.Fprintf(os.Stderr, "  Endpoint : http://%s/v1/chat/completions\n", addr)
+	fmt.Fprintf(os.Stderr, "  Upstream : %s\n", pmURL)
+	fmt.Fprintf(os.Stderr, "  Health   : http://%s/health\n", addr)
+	if d.DeskMeta.Name != "" {
+		fmt.Fprintf(os.Stderr, "  Desk     : %s\n", d.DeskMeta.Name)
+	}
+	fmt.Fprintf(os.Stderr, "  Ledger   : %s\n", config.LedgerDir())
+	fmt.Fprintln(os.Stderr)
 }
 
 func runGatewayStatus(cmd *cobra.Command, args []string) error {
@@ -181,7 +279,6 @@ func runGatewayStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Pretty-print JSON too for piping
 	if os.Getenv("SB_JSON") != "" {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
