@@ -47,3 +47,24 @@ func AWSConfigPath() string {
 	}
 	return filepath.Join(home, ".aws", "config")
 }
+
+// PackmuleDir returns the path to ~/.packmule/ — the pm runtime directory.
+// sb uses this to locate the pm PID file and log file for process management.
+func PackmuleDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.Getenv("HOME"), ".packmule")
+	}
+	return filepath.Join(home, ".packmule")
+}
+
+// PMPIDFile returns the path to ~/.packmule/pm.pid.
+func PMPIDFile() string {
+	return filepath.Join(PackmuleDir(), "pm.pid")
+}
+
+// PMLogFile returns the path to ~/.packmule/pm.log.
+func PMLogFile() string {
+	return filepath.Join(PackmuleDir(), "pm.log")
+}
+

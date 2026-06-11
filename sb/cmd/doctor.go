@@ -17,7 +17,7 @@ var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check setup and optionally install git hooks",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("🩺 Saddlebag Doctor\n")
+		fmt.Println("🩺 Saddlebag Doctor")
 
 		// Check ~/.saddlebag directory
 		checkDir("Config directory", config.SaddlebagDir())

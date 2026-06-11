@@ -3,11 +3,12 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,47 +18,58 @@ import (
 	"github.com/marcusguttenplan/sb/internal/trace"
 )
 
-// Server is the Packmule model gateway HTTP server.
-// It listens on localhost and speaks OpenAI-compatible HTTP.
+// Server is the saddlebag policy proxy.
+//
+// It sits in front of the Packmule gateway (pm serve, default :7475) and:
+//  1. Resolves routing metadata (provider, model, task type) from the request
+//  2. Performs a Cedar authorization check (Phase 1a: allow-all stub)
+//  3. Reverse-proxies authorized requests to pm on PackmuleURL
+//  4. Records an audit trail entry in the saddlebag ledger (~/.saddlebag/ledger/)
+//     (budget enforcement lives in pm; sb only writes attribution/identity audit rows)
+//
+// /v1/ledger and /health are served locally — they never hit pm.
+// /v1/models and /v1/chat/completions are proxied through.
 type Server struct {
-	mux      *http.ServeMux
-	httpSrv  *http.Server
-	ledger   *ledger.Ledger
-	budget   *Budget
-	desk     *desk.Desk
-	secrets  SecretResolver
-	logger   *log.Logger
+	mux        *http.ServeMux
+	httpSrv    *http.Server
+	proxy      *httputil.ReverseProxy
+	packmuleURL string
+	ledger     *ledger.Ledger
+	desk       *desk.Desk
+	logger     *log.Logger
 }
 
-// SecretResolver retrieves API keys by provider name.
-// In production, this calls into the Saddlebag keychain.
-// In tests, it can be a simple map lookup.
+// SecretResolver satisfies the gateway.Config API used by cmd/gateway.go.
+// The proxy does not use API keys itself — they live in pm — but the interface
+// is kept so cmd code does not need conditional compilation.
 type SecretResolver interface {
 	APIKey(provider string) (string, error)
 }
 
-// Config holds everything needed to create a Server.
+// Config holds everything needed to create a policy-proxy Server.
 type Config struct {
-	// Desk is the active desk configuration (routing, budget, Ollama URL).
+	// Desk is the active desk configuration (used for routing metadata only).
 	Desk *desk.Desk
 
-	// Ledger is the token ledger (required).
+	// Ledger is the saddlebag audit ledger (~/.saddlebag/ledger/).
 	Ledger *ledger.Ledger
 
-	// Secrets resolves API keys per provider.
+	// Secrets is accepted for API compatibility but unused by the proxy.
+	// API keys are held by pm, not sb.
 	Secrets SecretResolver
 
 	// Logger, if nil defaults to the standard logger.
 	Logger *log.Logger
+
+	// PackmuleURL is the base URL of the pm gateway process.
+	// Default: "http://localhost:7475"
+	PackmuleURL string
 }
 
-// New creates a new gateway Server from the given config.
+// New creates a new policy-proxy Server.
 func New(cfg Config) (*Server, error) {
 	if cfg.Ledger == nil {
 		return nil, fmt.Errorf("gateway: ledger is required")
-	}
-	if cfg.Secrets == nil {
-		return nil, fmt.Errorf("gateway: secrets resolver is required")
 	}
 	if cfg.Desk == nil {
 		cfg.Desk = &desk.Desk{}
@@ -68,44 +80,65 @@ func New(cfg Config) (*Server, error) {
 		logger = log.Default()
 	}
 
-	var limitUSD, warnUSD float64
-	if cfg.Desk.LLM != nil && cfg.Desk.LLM.Budget != nil {
-		limitUSD = cfg.Desk.LLM.Budget.DailyLimitUSD
-		warnUSD = cfg.Desk.LLM.Budget.WarnAtUSD
+	pmURL := cfg.PackmuleURL
+	if pmURL == "" {
+		pmURL = "http://localhost:7475"
+	}
+
+	target, err := url.Parse(pmURL)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: invalid packmule URL %q: %w", pmURL, err)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		logger.Printf("[proxy] upstream error: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{
+				"message": "Packmule gateway unavailable: " + err.Error(),
+				"type":    "upstream_error",
+				"code":    strconv.Itoa(http.StatusBadGateway),
+			},
+		})
 	}
 
 	s := &Server{
-		mux:    http.NewServeMux(),
-		ledger: cfg.Ledger,
-		budget: NewBudget(cfg.Ledger, limitUSD, warnUSD),
-		desk:   cfg.Desk,
-		secrets: cfg.Secrets,
-		logger: logger,
+		mux:         http.NewServeMux(),
+		proxy:       proxy,
+		packmuleURL: pmURL,
+		ledger:      cfg.Ledger,
+		desk:        cfg.Desk,
+		logger:      logger,
 	}
 
-	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
-	s.mux.HandleFunc("/v1/models", s.handleModels)
+	// Locally served routes
+	s.mux.HandleFunc("/v1/ledger", s.handleLedger)
 	s.mux.HandleFunc("/health", s.handleHealth)
+
+	// Proxied routes — with routing metadata injection
+	s.mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	s.mux.HandleFunc("/v1/models", s.handleProxy)
+	s.mux.HandleFunc("/v1/embeddings", s.handleProxy)
 
 	return s, nil
 }
 
 // ListenAndServe starts the server on the given address (e.g. "127.0.0.1:7474").
-// It blocks until the server is stopped.
 func (s *Server) ListenAndServe(addr string) error {
 	s.httpSrv = &http.Server{
 		Addr:         addr,
 		Handler:      s.mux,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Minute, // long for streaming
+		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
-	s.logger.Printf("[gateway] listening on http://%s", addr)
+	s.logger.Printf("[proxy] listening on http://%s → pm %s", addr, s.packmuleURL)
 	return s.httpSrv.ListenAndServe()
 }
 
 // ListenOnFreePort starts the server on a random free localhost port.
-// Returns the listener so the caller can retrieve the actual port.
 func (s *Server) ListenOnFreePort() (net.Listener, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -117,11 +150,7 @@ func (s *Server) ListenOnFreePort() (net.Listener, error) {
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
-	go func() {
-		if err := s.httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Printf("[gateway] serve error: %v", err)
-		}
-	}()
+	go s.httpSrv.Serve(ln) //nolint:errcheck
 	return ln, nil
 }
 
@@ -134,289 +163,148 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers
+// Locally served handlers
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	// Return a minimal models list from the desk config
-	type modelEntry struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-	}
-	var models []modelEntry
-
-	if s.desk.LLM != nil {
-		if s.desk.LLM.DefaultModel != "" {
-			models = append(models, modelEntry{
-				ID:      s.desk.LLM.DefaultProvider + "/" + s.desk.LLM.DefaultModel,
-				Object:  "model",
-				OwnedBy: s.desk.LLM.DefaultProvider,
-			})
-		}
-		for _, entry := range s.desk.LLM.Routing {
-			provider, model := splitRoutingEntry(entry)
-			models = append(models, modelEntry{
-				ID:      provider + "/" + model,
-				Object:  "model",
-				OwnedBy: provider,
-			})
-		}
-	}
-
+	// Also check pm health and include it in the response.
+	pmHealthy := s.checkPMHealth()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"object": "list",
-		"data":   models,
+		"status":   "ok",
+		"pm":       pmHealthyStatus(pmHealthy),
+		"pm_url":   s.packmuleURL,
 	})
 }
+
+func (s *Server) handleLedger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only GET is supported")
+		return
+	}
+	summary, err := s.ledger.TodaySummary()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ledger_error", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
+}
+
+// ---------------------------------------------------------------------------
+// Chat completions: policy check → enrich headers → proxy → audit log
+// ---------------------------------------------------------------------------
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	if r.Method != http.MethodPost {
-		s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is supported")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Only POST is supported")
 		return
 	}
 
-	// --- Parse traceparent ---
+	// Parse traceparent — propagate to pm.
 	tc := trace.ParseOrNew(r.Header.Get(trace.TraceParentHeader))
 	childSpan, _ := tc.NewSpan()
+	r.Header.Set(trace.TraceParentHeader, childSpan.Header())
 
-	// --- Parse request body ---
-	var req ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON: "+err.Error())
-		return
-	}
+	// Phase 1a Cedar stub: allow all.
+	// Phase 1b: evaluate Cedar policy with desk identity + task type.
+	// if !s.cedarAllow(r) { writeError(w, 403, "forbidden", "Cedar policy denied"); return }
 
-	// --- Read routing hints from headers (take priority over body fields) ---
+	// Inject routing metadata so pm can skip re-resolution if desired.
+	// pm still does its own routing; these headers are informational.
+	var taskType string
 	if v := r.Header.Get("X-Task-Type"); v != "" {
-		req.XTaskType = v
-	}
-	if v := r.Header.Get("X-Model"); v != "" {
-		req.XModel = v
+		taskType = v
 	}
 
-	// --- Resolve model via routing hierarchy ---
-	pathDir := r.Header.Get("X-Path-Dir") // optional: directory of the file being edited
-	resolution := desk.ResolveModel(s.desk, req.XTaskType, req.XModel, pathDir)
-
-	provider := resolution.Provider
-	model := resolution.Model
-
-	// If the request already specifies a model in "provider/model" format, use that.
-	if req.Model != "" && strings.Contains(req.Model, "/") {
-		provider, model = splitRoutingEntry(req.Model)
-	} else if req.Model != "" && resolution.Source == "global" {
-		// Model specified without provider — use desk default provider
-		model = req.Model
-	}
-
-	// --- Budget check ---
-	budgetStatus, budgetErr := s.budget.Check()
-	if budgetErr != nil {
-		s.writeError(w, http.StatusTooManyRequests, "budget_exceeded", budgetErr.Error())
-		return
-	}
-
-	// Add budget headers
-	if budgetStatus.LimitUSD > 0 {
-		w.Header().Set("X-Budget-Remaining", fmt.Sprintf("%.4f", budgetStatus.Remaining))
-		w.Header().Set("X-Budget-Limit", fmt.Sprintf("%.2f", budgetStatus.LimitUSD))
-		if budgetStatus.Warned {
-			w.Header().Set("X-Budget-Warning", "approaching-limit")
+	if s.desk != nil {
+		resolution := desk.ResolveModel(s.desk, taskType, r.Header.Get("X-Model"), r.Header.Get("X-Path-Dir"))
+		// Only set these if pm hasn't already received them from the client.
+		if r.Header.Get("X-Sb-Provider") == "" {
+			r.Header.Set("X-Sb-Provider", resolution.Provider)
+			r.Header.Set("X-Sb-Model", resolution.Model)
+			r.Header.Set("X-Sb-Routing-Source", resolution.Source)
 		}
 	}
 
-	// --- Add trace headers ---
-	w.Header().Set(trace.TraceParentHeader, childSpan.Header())
-	w.Header().Set("X-Routing-Source", resolution.Source)
-	w.Header().Set("X-Provider", provider)
-	w.Header().Set("X-Model-Used", model)
+	// Use a response recorder to capture headers pm sends back.
+	rr := newResponseRecorder(w)
+	s.proxy.ServeHTTP(rr, r)
 
-	// --- Build provider ---
-	p, err := s.buildProvider(provider)
-	if err != nil {
-		s.logger.Printf("[gateway] build provider %q: %v", provider, err)
-		// Try fallback chain
-		p, provider, model, err = s.tryFallback(provider, model)
-		if err != nil {
-			s.writeError(w, http.StatusInternalServerError, "provider_unavailable", err.Error())
-			return
-		}
-	}
-
-	// --- Dispatch ---
-	var usage *Usage
-	var statusCode int
-
-	if req.Stream {
-		usage, statusCode, err = s.handleStream(r.Context(), w, p, model, &req, childSpan)
-	} else {
-		usage, statusCode, err = s.handleNonStream(r.Context(), w, p, model, &req, childSpan)
-	}
-
-	// --- Record ledger entry ---
-	durationMS := time.Since(start).Milliseconds()
+	// Audit trail: write a thin ledger entry to ~/ .saddlebag/ledger/ with
+	// attribution info. Token counts come from X-* headers pm sets on the response.
 	entry := ledger.Entry{
 		TraceID:       childSpan.TraceID,
 		SpanID:        childSpan.SpanID,
 		Desk:          s.desk.DeskMeta.Name,
-		Provider:      provider,
-		Model:         model,
-		TaskType:      req.XTaskType,
-		DurationMS:    durationMS,
-		RoutingSource: resolution.Source,
-		StatusCode:    statusCode,
-		IsLocal:       ledger.IsLocalProvider(provider),
+		Provider:      coalesce(rr.Header().Get("X-Provider"), r.Header.Get("X-Sb-Provider")),
+		Model:         coalesce(rr.Header().Get("X-Model-Used"), r.Header.Get("X-Sb-Model")),
+		TaskType:      taskType,
+		DurationMS:    time.Since(start).Milliseconds(),
+		RoutingSource: coalesce(rr.Header().Get("X-Routing-Source"), "proxy"),
+		StatusCode:    rr.status,
 	}
 
-	if usage != nil {
-		entry.InputTokens = usage.PromptTokens
-		entry.OutputTokens = usage.CompletionTokens
-		entry.CacheReadTokens = usage.CacheReadInputTokens
-		entry.CacheWriteTokens = usage.CacheCreationInputTokens
-		entry.CostUSD = ledger.ComputeCost(provider, model,
-			entry.InputTokens, entry.OutputTokens,
-			entry.CacheReadTokens, entry.CacheWriteTokens)
+	if err := s.ledger.Append(entry); err != nil {
+		s.logger.Printf("[proxy] audit ledger append: %v", err)
 	}
+}
 
+// handleProxy is a bare reverse-proxy handler for routes that need no special treatment.
+func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
+	s.proxy.ServeHTTP(w, r)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func (s *Server) checkPMHealth() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.packmuleURL+"/health", nil)
 	if err != nil {
-		entry.ErrorMessage = err.Error()
+		return false
 	}
-
-	if appendErr := s.ledger.Append(entry); appendErr != nil {
-		s.logger.Printf("[gateway] ledger append: %v", appendErr)
-	}
-}
-
-func (s *Server) handleNonStream(ctx context.Context, w http.ResponseWriter, p Provider, model string, req *ChatRequest, tc *trace.Context) (*Usage, int, error) {
-	resp, err := p.Chat(ctx, model, req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		var pErr *ProviderError
-		if errors.As(err, &pErr) {
-			code := pErr.StatusCode
-			if code <= 0 {
-				code = http.StatusBadGateway // network failure talking to provider
-			}
-			s.writeError(w, code, "provider_error", pErr.Message)
-			return nil, code, err
-		}
-		s.writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
-		return nil, http.StatusInternalServerError, err
+		return false
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
-	return resp.Usage, http.StatusOK, nil
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
-func (s *Server) handleStream(ctx context.Context, w http.ResponseWriter, p Provider, model string, req *ChatRequest, tc *trace.Context) (*Usage, int, error) {
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	// Flush immediately so the client sees headers
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
+func pmHealthyStatus(ok bool) string {
+	if ok {
+		return "ok"
 	}
-
-	// Wrap writer with flusher so each chunk is sent immediately
-	fw := &flushWriter{w: w}
-
-	usage, err := p.ChatStream(ctx, model, req, fw)
-	if err != nil {
-		var pErr *ProviderError
-		if errors.As(err, &pErr) {
-			return usage, pErr.StatusCode, err
-		}
-		return usage, http.StatusInternalServerError, err
-	}
-	return usage, http.StatusOK, nil
+	return "unavailable"
 }
 
-// tryFallback attempts to build a provider from the desk fallback chain.
-func (s *Server) tryFallback(failedProvider, model string) (Provider, string, string, error) {
-	chain := desk.FallbackChain(s.desk)
-	for _, entry := range chain {
-		if entry == failedProvider {
-			continue // skip the one that already failed
-		}
-		p, m := splitRoutingEntry(entry)
-		if m == "" {
-			m = model // keep the original model for same-provider fallback
-		}
-		provider, err := s.buildProvider(p)
-		if err != nil {
-			s.logger.Printf("[gateway] fallback provider %q unavailable: %v", p, err)
-			continue
-		}
-		s.logger.Printf("[gateway] falling back to provider=%q model=%q", p, m)
-		return provider, p, m, nil
-	}
-	return nil, "", "", fmt.Errorf("all providers in fallback chain failed")
-}
-
-// buildProvider creates a Provider for the given provider name, loading its API key.
-func (s *Server) buildProvider(provider string) (Provider, error) {
-	switch provider {
-	case "anthropic":
-		key, err := s.secrets.APIKey("anthropic")
-		if err != nil {
-			return nil, fmt.Errorf("anthropic API key: %w", err)
-		}
-		return newAnthropicProvider(key), nil
-	case "openai":
-		key, err := s.secrets.APIKey("openai")
-		if err != nil {
-			return nil, fmt.Errorf("openai API key: %w", err)
-		}
-		return newOpenAIProvider(key), nil
-	case "google":
-		key, err := s.secrets.APIKey("google")
-		if err != nil {
-			return nil, fmt.Errorf("google API key: %w", err)
-		}
-		return newGoogleProvider(key), nil
-	case "ollama":
-		baseURL := desk.OllamaBaseURL(s.desk)
-		return newOllamaProvider(baseURL), nil
-	case "claude-code":
-		// No API key — uses Claude Code subscription auth from ~/.claude/
-		return newClaudeCodeProvider()
-	case "gemini-cli":
-		// No API key — uses Gemini subscription credentials from ~/.gemini/
-		return newGeminiCLIProvider("")
-	default:
-		return nil, fmt.Errorf("unknown provider: %q", provider)
-	}
-}
-
-func (s *Server) writeError(w http.ResponseWriter, statusCode int, errType, msg string) {
-	// Guard: WriteHeader panics on invalid (0 or negative) codes.
-	// 0 means a network-level failure (never got an HTTP response from provider).
+func writeError(w http.ResponseWriter, statusCode int, errType, msg string) {
 	if statusCode <= 0 || statusCode > 999 {
 		statusCode = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(ErrorResponse{
-		Error: ErrorDetail{
-			Message: msg,
-			Type:    errType,
-			Code:    strconv.Itoa(statusCode),
+	json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{
+			"message": msg,
+			"type":    errType,
+			"code":    strconv.Itoa(statusCode),
 		},
 	})
+}
+
+func coalesce(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // splitRoutingEntry splits "provider/model" into its parts.
@@ -429,21 +317,24 @@ func splitRoutingEntry(entry string) (provider, model string) {
 	return entry[:idx], entry[idx+1:]
 }
 
-// flushWriter wraps an http.ResponseWriter and flushes after every Write call.
-type flushWriter struct {
-	w http.ResponseWriter
+// responseRecorder wraps http.ResponseWriter to capture the status code and
+// response headers set by pm (for audit logging).
+type responseRecorder struct {
+	http.ResponseWriter
+	status int
 }
 
-func (fw *flushWriter) Write(p []byte) (int, error) {
-	n, err := fw.w.Write(p)
-	if flusher, ok := fw.w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	return n, err
+func newResponseRecorder(w http.ResponseWriter) *responseRecorder {
+	return &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 }
 
-// MapSecretResolver is a SecretResolver backed by a simple string map.
-// Useful for tests and local dev without a keychain.
+func (rr *responseRecorder) WriteHeader(code int) {
+	rr.status = code
+	rr.ResponseWriter.WriteHeader(code)
+}
+
+// MapSecretResolver is kept for API compatibility with cmd/gateway.go.
+// The proxy never calls APIKey — keys live in pm.
 type MapSecretResolver struct {
 	Keys map[string]string
 }

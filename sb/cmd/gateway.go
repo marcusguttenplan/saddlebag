@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -27,25 +26,28 @@ var gatewayCmd = &cobra.Command{
 
 var gatewayStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the model gateway on localhost",
-	Long: `Start the Packmule model gateway — a localhost OpenAI-compatible HTTP proxy.
+	Short: "Start the saddlebag policy proxy on localhost",
+	Long: `Start the saddlebag policy proxy — a localhost HTTP server that sits in
+front of the Packmule gateway (pm serve) and enforces policy.
 
-The gateway routes requests to the correct provider based on the active desk's
-[llm] configuration. It records all calls to the token ledger and enforces the
-daily budget limit.
+The proxy:
+  - Resolves desk routing metadata and injects it as X-Sb-* headers
+  - Performs Cedar authorization (Phase 1a: allow-all stub)
+  - Reverse-proxies authorized requests to pm (default: http://localhost:7475)
+  - Writes an audit trail row to ~/.saddlebag/ledger/
 
-The active desk is resolved via the normal desk resolution order:
-  $SB_DESK env var → .desk file → working_dir match → default
+Start pm serve first, then start sb gateway:
+  pm serve &
+  sb gateway start
 
-API keys are resolved from environment variables:
-  ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY
-
-Ollama requires no key (local).
+Or point at an existing pm instance:
+  sb gateway start --packmule-url http://localhost:7475
 
 Examples:
-  sb gateway start                    # start on default port (7474)
-  sb gateway start --port 8080        # start on custom port
-  sb gateway start --desk myproject   # use specific desk
+  sb gateway start                              # default :7474 → pm :7475
+  sb gateway start --port 8080                  # custom sb port
+  sb gateway start --desk myproject             # use specific desk
+  sb gateway start --packmule-url http://...    # non-default pm URL
 `,
 	RunE: runGatewayStart,
 }
@@ -57,15 +59,15 @@ var gatewayStatusCmd = &cobra.Command{
 }
 
 var (
-	gatewayPort      string
-	gatewayDesk      string
-	gatewayWithOllama bool
+	gatewayPort       string
+	gatewayDesk       string
+	gatewayPackmuleURL string
 )
 
 func init() {
 	gatewayStartCmd.Flags().StringVar(&gatewayPort, "port", "7474", "Port to listen on (localhost only)")
 	gatewayStartCmd.Flags().StringVar(&gatewayDesk, "desk", "", "Desk to use (default: resolved from environment)")
-	gatewayStartCmd.Flags().BoolVar(&gatewayWithOllama, "with-ollama", false, "Start ollama serve if not already running")
+	gatewayStartCmd.Flags().StringVar(&gatewayPackmuleURL, "packmule-url", "http://localhost:7475", "Packmule pm serve URL")
 
 	gatewayCmd.AddCommand(gatewayStartCmd)
 	gatewayCmd.AddCommand(gatewayStatusCmd)
@@ -101,49 +103,18 @@ func runGatewayStart(cmd *cobra.Command, args []string) error {
 		activeDeskConfig = &desk.Desk{}
 	}
 
-	// --- Ollama ---
-	var ollamaMgr *gateway.OllamaManager
-	if gatewayWithOllama {
-		ollamaURL := "http://localhost:11434"
-		if activeDeskConfig.LLM != nil && activeDeskConfig.LLM.Providers != nil {
-			if cfg, ok := activeDeskConfig.LLM.Providers["ollama"]; ok && cfg.BaseURL != "" {
-				ollamaURL = cfg.BaseURL
-			}
-		}
-		ollamaMgr = gateway.NewOllamaManager(ollamaURL)
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
-		defer cancel()
-		if err := ollamaMgr.EnsureRunning(ctx); err != nil {
-			return fmt.Errorf("ensuring ollama is running: %w", err)
-		}
-		if ollamaMgr.Managed() {
-			logger.Printf("started ollama serve (managed subprocess)")
-		} else {
-			logger.Printf("ollama already running — not managing lifecycle")
-		}
-	}
-
-	// --- Ledger ---
+	// --- Audit ledger ---
 	l, err := ledger.New(config.LedgerDir())
 	if err != nil {
 		return fmt.Errorf("initializing ledger: %w", err)
 	}
 
-	// --- Secrets from environment ---
-	secrets := &gateway.MapSecretResolver{
-		Keys: map[string]string{
-			"anthropic": os.Getenv("ANTHROPIC_API_KEY"),
-			"openai":    os.Getenv("OPENAI_API_KEY"),
-			"google":    os.Getenv("GOOGLE_API_KEY"),
-		},
-	}
-
-	// --- Build server ---
+	// --- Build proxy server ---
 	srv, err := gateway.New(gateway.Config{
-		Desk:    activeDeskConfig,
-		Ledger:  l,
-		Secrets: secrets,
-		Logger:  logger,
+		Desk:        activeDeskConfig,
+		Ledger:      l,
+		Logger:      logger,
+		PackmuleURL: gatewayPackmuleURL,
 	})
 	if err != nil {
 		return fmt.Errorf("creating gateway: %w", err)
@@ -162,41 +133,19 @@ func runGatewayStart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Print ready message after a brief startup delay
 	time.Sleep(50 * time.Millisecond)
-	fmt.Fprintf(os.Stderr, "\n  Gateway ready\n")
+	fmt.Fprintf(os.Stderr, "\n  Saddlebag policy proxy ready\n")
 	fmt.Fprintf(os.Stderr, "  Endpoint : http://%s/v1/chat/completions\n", addr)
+	fmt.Fprintf(os.Stderr, "  Upstream : %s\n", gatewayPackmuleURL)
+	fmt.Fprintf(os.Stderr, "  Health   : http://%s/health\n", addr)
 	if activeDeskConfig.DeskMeta.Name != "" {
 		fmt.Fprintf(os.Stderr, "  Desk     : %s\n", activeDeskConfig.DeskMeta.Name)
-	}
-	if activeDeskConfig.LLM != nil {
-		fmt.Fprintf(os.Stderr, "  Default  : %s/%s\n", activeDeskConfig.LLM.DefaultProvider, activeDeskConfig.LLM.DefaultModel)
-		if activeDeskConfig.LLM.Budget != nil && activeDeskConfig.LLM.Budget.DailyLimitUSD > 0 {
-			fmt.Fprintf(os.Stderr, "  Budget   : $%.2f/day\n", activeDeskConfig.LLM.Budget.DailyLimitUSD)
-		}
-		if activeDeskConfig.LLM.Providers != nil {
-			if ollamaCfg, ok := activeDeskConfig.LLM.Providers["ollama"]; ok {
-				fmt.Fprintf(os.Stderr, "  Ollama   : %s (models: %s)\n", ollamaCfg.BaseURL, strings.Join(ollamaCfg.Models, ", "))
-			}
-		}
-	}
-	// Ollama status line in banner
-	if gatewayWithOllama && ollamaMgr != nil {
-		if ollamaMgr.Managed() {
-			fmt.Fprintf(os.Stderr, "  Ollama   : managed (started by sb)\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "  Ollama   : external (already running)\n")
-		}
 	}
 	fmt.Fprintf(os.Stderr, "  Ledger   : %s\n", config.LedgerDir())
 	fmt.Fprintln(os.Stderr)
 
 	<-stop
 	logger.Println("shutting down...")
-	if ollamaMgr != nil && ollamaMgr.Managed() {
-		logger.Println("stopping ollama serve...")
-		ollamaMgr.Stop()
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(ctx)
