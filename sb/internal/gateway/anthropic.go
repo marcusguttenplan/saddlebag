@@ -19,12 +19,14 @@ const anthropicVersion = "2023-06-01"
 type anthropicProvider struct {
 	apiKey     string
 	httpClient *http.Client
+	baseURL    string // defaults to anthropicAPIBase; overridable in tests
 }
 
 func newAnthropicProvider(apiKey string) *anthropicProvider {
 	return &anthropicProvider{
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 5 * time.Minute},
+		baseURL:    anthropicAPIBase,
 	}
 }
 
@@ -131,7 +133,7 @@ func (p *anthropicProvider) Chat(ctx context.Context, model string, req *ChatReq
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		anthropicAPIBase+"/v1/messages", bytes.NewReader(body))
+		p.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +182,7 @@ func (p *anthropicProvider) ChatStream(ctx context.Context, model string, req *C
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		anthropicAPIBase+"/v1/messages", bytes.NewReader(body))
+		p.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -212,11 +214,6 @@ func (p *anthropicProvider) streamToOpenAI(ctx context.Context, body io.Reader, 
 	var finalUsage *Usage
 	chunkID := fmt.Sprintf("chatcmpl-anthropic-%d", time.Now().UnixNano())
 
-	// Track multi-block content (text + tool_use blocks)
-	blockTypes := make(map[int]string) // index → "text" | "tool_use"
-	toolIDs := make(map[int]string)    // index → tool call ID
-	toolNames := make(map[int]string)  // index → tool name
-
 	var eventType string
 
 	for scanner.Scan() {
@@ -244,15 +241,10 @@ func (p *anthropicProvider) streamToOpenAI(ctx context.Context, body io.Reader, 
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				continue
 			}
-			if ev.ContentBlock != nil {
-				blockTypes[ev.Index] = ev.ContentBlock.Type
-				if ev.ContentBlock.Type == "tool_use" {
-					toolIDs[ev.Index] = ev.ContentBlock.ID
-					toolNames[ev.Index] = ev.ContentBlock.Name
-					// Emit a delta with the tool_call start
-					chunk := openAIChunkForToolStart(chunkID, model, ev.Index, ev.ContentBlock.ID, ev.ContentBlock.Name)
-					writeSSEChunk(w, chunk)
-				}
+			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+				// Emit the tool call start delta with the block index as the tool call index.
+				chunk := openAIChunkForToolStart(chunkID, model, ev.Index, ev.ContentBlock.ID, ev.ContentBlock.Name)
+				writeSSEChunk(w, chunk)
 			}
 
 		case "content_block_delta":
@@ -278,9 +270,12 @@ func (p *anthropicProvider) streamToOpenAI(ctx context.Context, body io.Reader, 
 				continue
 			}
 			if ev.Usage != nil {
-				finalUsage = &Usage{
-					CompletionTokens: ev.Usage.OutputTokens,
+				// Merge into existing usage rather than replace — message_start
+				// already populated PromptTokens; overwriting would lose them.
+				if finalUsage == nil {
+					finalUsage = &Usage{}
 				}
+				finalUsage.CompletionTokens = ev.Usage.OutputTokens
 			}
 
 		case "message_start":
@@ -309,9 +304,6 @@ func (p *anthropicProvider) streamToOpenAI(ctx context.Context, body io.Reader, 
 			return finalUsage, nil
 		}
 
-		_ = blockTypes
-		_ = toolIDs
-		_ = toolNames
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -338,9 +330,13 @@ func toAnthropicRequest(model string, req *ChatRequest, stream bool) (*anthropic
 		aReq.MaxTokens = *req.MaxTokens
 	}
 
+	// Enforce strict user→assistant alternation before converting messages.
+	// Anthropic returns 400 on consecutive same-role turns.
+	normalizedMsgs := CollapseConsecutiveRoles(req.Messages)
+
 	// Extract system prompt (Anthropic uses a top-level field, not a message role)
 	var messages []anthropicMessage
-	for _, m := range req.Messages {
+	for _, m := range normalizedMsgs {
 		if m.Role == "system" {
 			aReq.System = m.ContentString()
 			continue
@@ -486,6 +482,9 @@ func openAIChunkForText(id, model, text string) StreamChunk {
 	}
 }
 
+// openAIChunkForToolStart emits the first streaming delta for a tool call.
+// index is the tool call's position in the tool_calls array; clients use it
+// to route subsequent argument deltas to the correct ToolCall slot.
 func openAIChunkForToolStart(id, model string, index int, toolID, toolName string) StreamChunk {
 	return StreamChunk{
 		ID:     id,
@@ -495,15 +494,18 @@ func openAIChunkForToolStart(id, model string, index int, toolID, toolName strin
 			Index: 0,
 			Delta: StreamDelta{
 				ToolCalls: []ToolCall{{
-					ID:   toolID,
-					Type: "function",
-					Function: ToolCallFunction{Name: toolName},
+					Index:    intPtr(index),
+					ID:       toolID,
+					Type:     "function",
+					Function: ToolCallFunction{Name: toolName, Arguments: ""},
 				}},
 			},
 		}},
 	}
 }
 
+// openAIChunkForToolArgs emits a streaming delta carrying partial JSON arguments
+// for the tool call at the given index. Clients accumulate these by index.
 func openAIChunkForToolArgs(id, model string, index int, partial string) StreamChunk {
 	return StreamChunk{
 		ID:     id,
@@ -513,6 +515,7 @@ func openAIChunkForToolArgs(id, model string, index int, partial string) StreamC
 			Index: 0,
 			Delta: StreamDelta{
 				ToolCalls: []ToolCall{{
+					Index:    intPtr(index),
 					Function: ToolCallFunction{Arguments: partial},
 				}},
 			},

@@ -18,12 +18,14 @@ const googleAPIBase = "https://generativelanguage.googleapis.com"
 type googleProvider struct {
 	apiKey     string
 	httpClient *http.Client
+	baseURL    string // defaults to googleAPIBase; overridable in tests
 }
 
 func newGoogleProvider(apiKey string) *googleProvider {
 	return &googleProvider{
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 5 * time.Minute},
+		baseURL:    googleAPIBase,
 	}
 }
 
@@ -115,7 +117,7 @@ func (p *googleProvider) Chat(ctx context.Context, model string, req *ChatReques
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", googleAPIBase, model, p.apiKey)
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", p.baseURL, model, p.apiKey)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -160,7 +162,7 @@ func (p *googleProvider) ChatStream(ctx context.Context, model string, req *Chat
 		return nil, err
 	}
 
-	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", googleAPIBase, model, p.apiKey)
+	url := fmt.Sprintf("%s/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s", p.baseURL, model, p.apiKey)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -186,6 +188,16 @@ func (p *googleProvider) streamToOpenAI(ctx context.Context, body io.Reader, mod
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 	chunkID := fmt.Sprintf("chatcmpl-google-%d", time.Now().UnixNano())
 	var finalUsage *Usage
+
+	// Anchor tool call IDs and indices for the lifetime of this stream.
+	// Gemini emits complete functionCall objects per chunk (not token-by-token),
+	// so the risk of collision is: the same function call appearing in multiple
+	// consecutive chunks, or multiple distinct calls with the same name.
+	// We key by call_name+occurrence_count to produce stable, unique IDs.
+	toolIDMap := make(map[string]string) // canonicalKey → stable call ID
+	toolIndexMap := make(map[string]int) // canonicalKey → tool_calls array index
+	nameCount := make(map[string]int)    // name → how many times we've seen it this stream
+	nextToolIndex := 0
 
 	for scanner.Scan() {
 		select {
@@ -219,14 +231,28 @@ func (p *googleProvider) streamToOpenAI(ctx context.Context, body io.Reader, mod
 					chunk := openAIChunkForText(chunkID, model, part.Text)
 					writeSSEChunk(w, chunk)
 				}
-				// Tool calls in streaming: emit as tool_calls delta
 				if part.FunctionCall != nil {
-					// Generate a deterministic-ish ID
-					toolID := fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, time.Now().UnixNano())
-					startChunk := openAIChunkForToolStart(chunkID, model, 0, toolID, part.FunctionCall.Name)
-					writeSSEChunk(w, startChunk)
+					// Build a canonical key: name + occurrence index.
+					// This handles the case where the same function is called
+					// multiple times with different arguments (e.g. two read_file calls).
+					name := part.FunctionCall.Name
+					canonKey := fmt.Sprintf("%s#%d", name, nameCount[name])
+
+					toolID, seen := toolIDMap[canonKey]
+					if !seen {
+						// First time we see this call in the stream — assign stable ID and index.
+						toolID = fmt.Sprintf("call_%s_%d", name, time.Now().UnixNano())
+						toolIDMap[canonKey] = toolID
+						toolIndexMap[canonKey] = nextToolIndex
+						nextToolIndex++
+						nameCount[name]++
+						// Emit the start chunk with name and stable ID.
+						startChunk := openAIChunkForToolStart(chunkID, model, toolIndexMap[canonKey], toolID, name)
+						writeSSEChunk(w, startChunk)
+					}
+					// Emit arguments (Gemini sends complete args per chunk, not partial).
 					if len(part.FunctionCall.Args) > 0 {
-						argsChunk := openAIChunkForToolArgs(chunkID, model, 0, string(part.FunctionCall.Args))
+						argsChunk := openAIChunkForToolArgs(chunkID, model, toolIndexMap[canonKey], string(part.FunctionCall.Args))
 						writeSSEChunk(w, argsChunk)
 					}
 				}

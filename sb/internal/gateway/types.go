@@ -75,9 +75,14 @@ type ToolFunction struct {
 }
 
 // ToolCall is an assistant's request to call a tool.
+//
+// Index is only populated in streaming SSE deltas (OpenAI streaming format requires
+// clients to accumulate partial arguments by index). In non-streaming responses the
+// index is implicit from the array position, so Index is nil and omitted.
 type ToolCall struct {
-	ID       string           `json:"id"`
-	Type     string           `json:"type"` // "function"
+	Index    *int             `json:"index,omitempty"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"` // "function"
 	Function ToolCallFunction `json:"function"`
 }
 
